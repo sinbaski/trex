@@ -3,27 +3,34 @@ CC := gcc
 srcdir := src
 objdir := obj
 
+debug := -DDEBUG
+# debug :=
+USE_FAKE_SOURCE := 1
+
 srcs := $(wildcard $(srcdir)/*.c)
 objs := $(notdir $(patsubst %.c, %.o, $(srcs)))
 objs := $(addprefix $(objdir)/, $(objs))
 
-CFLAGS := -c -Wall -Werror -g3 $(shell pkg-config --cflags glib-2.0)
-LDFLAGS := -lcurl -Wl,-Bsymbolic-functions $(shell pkg-config --libs glib-2.0)
+CFLAGS := -c -Wall -Werror -Iinclude -g3 $(debug) \
+$(shell pkg-config --cflags glib-2.0) \
+-DUSE_FAKE_SOURCE=$(USE_FAKE_SOURCE)
 
+LDFLAGS := -lcurl -Wl,-Bsymbolic-functions $(shell pkg-config --libs glib-2.0)
 
 $(objs): $(objdir)/%.o: $(srcdir)/%.c
 	@if [ ! -e $(objdir) ]; then mkdir $(objdir); fi
 	$(CC) $(CFLAGS) $^ -o $@
 
-.PHONY: compile
-compile: $(objs)
+.PHONY: fakesource
+fakesource:
+	make -C fakesource all
 
 .PHONY: intraday
 intraday: $(objs)
-	$(CC) $^ $(LDFLAGS) -o $@
+	$(CC) $(filter %.o, $^) $(LDFLAGS) -o $@
 
 .PHONY: all
-all: intraday
+all: intraday fakesource
 
 .PHONY: clean
 clean:

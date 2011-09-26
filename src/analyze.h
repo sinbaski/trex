@@ -1,12 +1,14 @@
 #ifndef INTRADAY_ANALYZE_H
 #define INTRADAY_ANALYZE_H
-
 #include <glib.h>
+#include "trade.h"
 
 #define ORDER_DEPTH 5
 /* Most likely 80 */
-#define BATCH_SIZE 80
-#define SEC_AN_HOUR 3600
+#define MIN_ANALYSIS_SIZE 80
+#define MAX_TRADES_COUNT 80
+
+#define DATA_ROW_WIDTH 32
 
 struct order {
 	float price;
@@ -20,13 +22,6 @@ struct order_depth {
 	struct order ask[ORDER_DEPTH];
 };
 
-struct trade {
-	char market[10];
-	char time[9];
-	double price;
-	long quantity;
-};
-
 struct market {
 	struct order_depth order_depth;
 	GList *trades;
@@ -35,13 +30,34 @@ struct market {
 	long trades_count;
 };
 
-struct indicators {
-	double average;
-	long volume;
-	double margin;
-	double tolerated_loss;
-	int allow_new_positions:1;
+enum trend {
+	trend_up = 0,
+	trend_down,
+	trend_unclear,
+	number_of_trend_types
 };
+
+struct trend_indicator {
+	enum trend trend;
+	int grp_size;
+};
+
+struct timely_indicator {
+	double average;
+	double highest;
+	double lowest;
+	int available;
+	double open_margin;
+	double caution_margin;
+};
+
+struct indicators {
+	long volume;
+	unsigned int allow_new_positions:1;
+	struct timely_indicator timely[3];
+	struct trend_indicator trends[2];
+};
+
 enum trade_mode {
 	buy_and_sell = 0,
 	sell_and_buy
@@ -55,8 +71,8 @@ enum trade_status {
 enum action_type {
 	action_buy = 0,
 	action_sell,
-	action_unclear,
-	number_of_action_types
+	action_observe,
+	number_of_action_types,
 };
 
 struct trade_position {
@@ -68,7 +84,10 @@ struct trade_position {
 	time_t enter_time;
 };
 
+char orderbookId[20];
+
 void set_position(const struct trade_position *position);
+void discard_old_records(int size);
 int trade_equal(const struct trade *t1, const struct trade *t2);
 void analyze();
 #endif
