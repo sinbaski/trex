@@ -3,9 +3,9 @@ CC := gcc
 srcdir := src
 objdir := obj
 
-debug := -DDEBUG
-# debug :=
-USE_FAKE_SOURCE := 1
+# debug := -DDEBUG
+debug :=
+USE_FAKE_SOURCE := 0
 
 srcs := $(wildcard $(srcdir)/*.c)
 objs := $(notdir $(patsubst %.c, %.o, $(srcs)))

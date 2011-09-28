@@ -24,16 +24,13 @@ struct indicators indicators = {
 	.volume = 0,
 	.timely = {
 		{
-			.open_margin = 0.0025,
-			.caution_margin = 0
+			.open_margin = 1.2 / 80,
 		},
 		{
-			.open_margin = 0,
-			.caution_margin = 0
+			.open_margin = 1.5 / 80,
 		},
 		{
-			.open_margin = 0,
-			.caution_margin = 0
+			.open_margin = 2 / 80,
 		},
 	},
 	.trends = {
@@ -41,10 +38,13 @@ struct indicators indicators = {
 			.grp_size = 15
 		},
 		{
-			.grp_size = 40
+			.grp_size = 20
 		},
-
-	}
+		{
+			.grp_size = 25
+		},
+	},
+	.tolerated_loss = 250
 };
 
 int indicators_initialized(void)
@@ -132,7 +132,6 @@ static long fnum_of_line(FILE *datafile)
 
 static double straight_average(long size, FILE *datafile)
 {
-	/* GList *p = g_list_nth(market.trades, index); */
 	int i;
 	double avg;
 	long total;
@@ -148,6 +147,38 @@ static double straight_average(long size, FILE *datafile)
 		fseek(datafile, -DATA_ROW_WIDTH, SEEK_CUR);
 	}
 	return avg;
+}
+
+static void calculate_bound(FILE *datafile, long size, double *bound)
+{
+	long i;
+		
+	memset(bound, 0, 2 * sizeof(double));
+	fseek(datafile, 0, SEEK_END);
+	for (i = 1; i <= size; i++) {
+		struct trade trade;
+		fseek(datafile, -DATA_ROW_WIDTH, SEEK_CUR);
+		fscanf(datafile, "%s\t%s\t%lf\t%ld",
+		       trade.market, trade.time, &trade.price,
+		       &trade.quantity);
+		if (!bound[0])
+			bound[0] = trade.price;
+		else
+			bound[0] = MIN(trade.price, bound[0]);
+		bound[1] = MAX(trade.price, bound[1]);
+		fseek(datafile, -DATA_ROW_WIDTH, SEEK_CUR);
+	}
+}
+
+static enum trend get_trend(void)
+{
+	int i;
+	enum trend trend;
+	for (i = 0; i < ARRAY_SIZE(indicators.trends); i++) {
+		if ((trend = indicators.trends[i].trend) != trend_unclear)
+			break;
+	}
+	return trend;
 }
 
 #define GRP_NUM 4
@@ -197,6 +228,7 @@ static void calculate_indicator(FILE *datafile, time_t since,
 {
 	struct trade trade;
 	const char *sincestr;
+	double x;
 	int i;
 	long tot;
 
@@ -207,7 +239,7 @@ static void calculate_indicator(FILE *datafile, time_t since,
 		return;
 	}
 	sincestr = make_timestring(since);
-	ind->average = ind->highest = ind->lowest = 0;
+	ind->ind[1] = ind->ind[2] = ind->ind[0] = 0;
 	tot = 0;
 	for (i = 1; 1; i++) {
 		fseek(datafile, -i * DATA_ROW_WIDTH, SEEK_END);
@@ -217,15 +249,18 @@ static void calculate_indicator(FILE *datafile, time_t since,
 		if (strcmp(trade.time, sincestr) < 0)
 			break;
 		tot += trade.quantity;
-		ind->average += (trade.price * trade.quantity)/tot
-			- ind->average * trade.quantity / tot;
-		ind->highest = MAX(ind->highest, trade.price);
-		ind->lowest = ind->lowest ? MIN(ind->lowest, trade.price) :
+		ind->ind[1] += (trade.price * trade.quantity)/tot
+			- ind->ind[1] * trade.quantity / tot;
+		ind->ind[2] = MAX(ind->ind[2], trade.price);
+		ind->ind[0] = ind->ind[0] ? MIN(ind->ind[0], trade.price) :
 			trade.price;
 		/* Break if we are at the beginning of the file */
 		if (ftell(datafile) == 0)
 			break;
 	}
+	x = (ind->ind[2] - ind->ind[0]) * 0.65;
+	if (x * my_position.quantity - fee > 100)
+		ind->open_margin = x / ind->ind[1];
 	ind->available = 1;
 }
 
@@ -237,11 +272,10 @@ static void dump_indicators(void)
 	for (i = 0; i < ARRAY_SIZE(indicators.trends); i++) {
 		printf(" %s", trend_strings[indicators.trends[i].trend]);
 	}
+	printf(" [%lf %lf]", indicators.bound[0], indicators.bound[1]);
 	for (i = 0; i < ARRAY_SIZE(indicators.timely); i++) {
-		printf(" {%d, %lf, %lf, %lf}. ", indicators.timely[i].available,
-		       indicators.timely[i].lowest,
-		       indicators.timely[i].average,
-		       indicators.timely[i].highest);
+		printf(" {%lf %f}.", indicators.timely[i].ind[1],
+		       indicators.timely[i].open_margin);
 	}
 }
 
@@ -259,9 +293,11 @@ static void update_indicators()
 	now = parse_time(((struct trade *)market.newest->data)->time);
 	if (!indicators.volume) {
 		for (i = 0; i < ARRAY_SIZE(indicators.timely); i++) {
-			indicators.timely[i].average = 0;
-			indicators.timely[i].lowest = 0;
-			indicators.timely[i].highest = 0;
+			int j;
+			for (j = 0; j < ARRAY_SIZE(indicators.timely[i].ind);
+			     j++) {
+				indicators.timely[i].ind[j] = 0;
+			}
 			indicators.timely[i].available = 0;
 		}
 	}
@@ -270,20 +306,21 @@ static void update_indicators()
 		/* average & volume */
 		indicators.volume += trade->quantity;
 		/* average of all trades so far */
-		indicators.timely[2].average +=
+		indicators.timely[2].ind[1] +=
 			(trade->price * trade->quantity)/indicators.volume -
-			indicators.timely[2].average * trade->quantity / indicators.volume;
-		indicators.timely[2].highest = MAX(indicators.timely[2].highest, trade->price);
-		indicators.timely[2].lowest = indicators.timely[2].lowest ?
-			MIN(indicators.timely[2].lowest, trade->price) : trade->price;
+			indicators.timely[2].ind[1] * trade->quantity / indicators.volume;
+		indicators.timely[2].ind[2] = MAX(indicators.timely[2].ind[2], trade->price);
+		indicators.timely[2].ind[0] = indicators.timely[2].ind[0] ?
+			MIN(indicators.timely[2].ind[0], trade->price) : trade->price;
 	}
 	/* There is no point comparing with the all-trades average */
 	indicators.timely[2].available = 0;
-	calculate_indicator(datafile, now - 10 * 60,
+	calculate_indicator(datafile, now - 20  * 60,
 			    &indicators.timely[0]);
-	/* calculate_indicator(datafile, now - 90 * 60, */
-	/* 		    &indicators.timely[1]); */
+	calculate_indicator(datafile, now - 60 * 60,
+			    &indicators.timely[1]);
 	find_trend(datafile);
+	calculate_bound(datafile, 80, indicators.bound);
 #ifdef DEBUG
 	indicators.allow_new_positions = 1;
 #else
@@ -324,7 +361,7 @@ static double calculate_profit(double price)
 	return diff * my_position.quantity - fee;
 }
 
-static void transact(enum action_type action)
+static void execute(enum action_type action)
 {
 	struct trade *trade = (struct trade *)market.newest->data;
 	double price = trade->price;
@@ -414,7 +451,7 @@ int trade_equal(const struct trade *t1, const struct trade *t2)
 /* 	     i < GRP_NUM - 1 && (flag = avg[i + 1] > avg[i] * (1 + margins[i])); */
 /* 	     i++); */
 
-/* 	if (flag && latest < indicators.highest * (1 - margin) && */
+/* 	if (flag && latest < indicators.ind[2] * (1 - margin) && */
 /* 	    (regavg < 0 || latest < regavg)) { */
 /* 		return conclusion->action = action_buy; */
 /* 	} */
@@ -423,7 +460,7 @@ int trade_equal(const struct trade *t1, const struct trade *t2)
 /* 	for (i = 0, flag = 0; */
 /* 	     i < GRP_NUM - 1 && (flag = avg[i + 1] < avg[i] * (1 - margins[i])); */
 /* 	     i++); */
-/* 	if (flag && latest > indicators.lowest * (1 + margin) && */
+/* 	if (flag && latest > indicators.ind[0] * (1 + margin) && */
 /* 	    (regavg < 0 || latest > regavg)) { */
 /* 		return conclusion->action = action_sell; */
 /* 	} */
@@ -471,127 +508,122 @@ int trade_equal(const struct trade *t1, const struct trade *t2)
 /* 	return conclusion->action; */
 /* } */
 
-/* static enum action_type global_moving(struct conclusion *conclusion) */
-/* { */
-/* 	double latest = ((struct trade *)market.newest->data)->price; */
-/* 	const double margin = 0.0075; */
-
-/* 	conclusion->analyzer = __func__; */
-/* 	if (!indicators_initialized()) */
-/* 		return conclusion->action = action_unclear; */
-/* 	/\* printf("%s: [%s %f, MA %f] latest %f. ", __func__, *\/ */
-/* 	/\*        my_position.status == complete ? "complete" : "incomplete", *\/ */
-/* 	/\*        my_position.price, indicators.average, *\/ */
-/* 	/\*        latest); *\/ */
-/* 	if (latest < indicators.average * (1 - margin)) { */
-/* 		/\* printf("BUY.\n"); *\/ */
-/* 		conclusion->action = action_buy; */
-/* 	} else if (latest > indicators.average * (1 + margin)) { */
-/* 		/\* printf("SELL.\n"); *\/ */
-/* 		conclusion->action = action_sell; */
-/* 	} else { */
-/* 		/\* printf("unclear.\n"); *\/ */
-/* 		conclusion->action = action_unclear; */
-/* 	} */
-/* 	/\* fflush(stdout); *\/ */
-/* 	return conclusion->action; */
-/* } */
-
-static enum action_type suggest_new_position(double price)
+static enum action_type price_comparer(double latest, int index)
 {
-	/* switch (indicators.trends[0].trend) { */
-	/* case trend_up: */
-	/* 	if (!indicators.timely[0].available) */
-	/* 		return action_observe; */
-	/* 	if (my_position.mode == buy_and_sell && */
-	/* 	    price < indicators.timely[0].average */
-	/* 	    * (1 - indicators.timely[0].open_margin)) */
-	/* 		return action_buy; */
-	/* 	return action_observe; */
-	/* case trend_down: */
-	/* 	if (!indicators.timely[0].available) */
-	/* 		return action_observe; */
-	/* 	if (my_position.mode == sell_and_buy && */
-	/* 	    price > indicators.timely[0].average */
-	/* 	    * (1 + indicators.timely[0].open_margin)) */
-	/* 		return action_sell; */
-	/* 	return action_observe; */
-	/* default: */
-	/* 	return action_observe; */
-	/* } */
+	enum action_type action;
+	struct timely_indicator *ind = indicators.timely + index;
+	double lim;
 
-	switch ((indicators.trends[1].trend << 2) |
-		indicators.trends[0].trend) {
-	case 0b0001: /* up down */
-	case 0b0100: /* down up */
-	case 0b1010: /* unclear, unclear */
-	case 0b0010: /* up unclear */
-	case 0b0110: /* down unclear */
+	if (!ind->available)
 		return action_observe;
-	case 0b0000: /* up up */
-		return action_buy;
-	case 0b0101: /* down down */
-		return action_sell;
-	case 0b1100: /* unclear up */
-		if (!indicators.timely[0].available)
-			return action_observe;
-		if (my_position.mode == buy_and_sell &&
-		    price < indicators.timely[0].average
-		    * (1 - indicators.timely[0].open_margin))
-			return action_buy;
+	lim = my_position.mode == buy_and_sell ?
+		ind->ind[1] * (1 - ind->open_margin) :
+		ind->ind[1] * (1 + ind->open_margin);
+
+	if (my_position.mode == buy_and_sell && latest < lim)
+		action = action_buy;
+	else if (my_position.mode == sell_and_buy && latest > lim)
+		action = action_sell;
+	else
+		action = action_observe;
+
+	if (action != action_observe)
+		printf(" %s-%d:", __func__, index);
+	return action;
+}
+
+static enum action_type trend_follower(double price)
+{
+	enum action_type action = action_observe;
+	enum trend trend = get_trend();
+	double lim, margin = 0.002;
+
+	if (trend == trend_unclear)
 		return action_observe;
-	case 0b1101: /* unclear down */
-		if (!indicators.timely[0].available)
-			return action_observe;
-		if (my_position.mode == sell_and_buy &&
-		    price > indicators.timely[0].average
-		    * (1 + indicators.timely[0].open_margin))
-			return action_sell;
-		return action_observe;
-	default:
-		return action_observe;
+	lim = trend == trend_up ?
+		indicators.bound[0] * (1 + margin):
+		indicators.bound[1] * (1 - margin);
+	switch (trend) {
+	case trend_up:
+		if (my_position.mode == buy_and_sell && price < lim)
+			action = action_buy;
+		break;
+	case trend_down:
+		if (my_position.mode == sell_and_buy && price > lim)
+			action = action_sell;
+		break;
+	default:;
 	}
+	if (action != action_observe)
+		printf(" %s:", __func__);
+	return action;
 }
 
 void analyze()
 {
 	enum action_type action = action_observe;
-/*	double happy_margin = 0.5 / 80; */
+	enum trend trend;
+	double happy_margin = 0.6 / 80;
 	struct trade *trade = (struct trade *)market.newest->data;
 	double latest = trade->price;
+
 	update_indicators();
+	trend = get_trend();
 	switch (my_position.status) {
 	case incomplete: {
 		double profit = calculate_profit(latest);
-		if (profit <= 0) {
-			break;
-		}
+		time_t t = parse_time(trade->time);
 		switch (my_position.mode) {
 		case sell_and_buy:
-			if (indicators.trends[0].trend == trend_up && 
-			    indicators.trends[1].trend != trend_down) {
+			if (trend == trend_up || (trend == trend_unclear &&
+						  latest < my_position.price
+						  * (1 - happy_margin))) {
 				action = action_buy;
 			} else {
 				action = action_observe;
 			}
 			break;
 		case buy_and_sell:
-			if (indicators.trends[0].trend == trend_down && 
-			    indicators.trends[1].trend != trend_up) {
+			if (trend == trend_down || (trend == trend_unclear &&
+						    latest > my_position.price
+						    * (1 + happy_margin))) {
 				action = action_sell;
 			} else {
 				action = action_observe;
 			}
 			break;
 		}
+		if (profit > 0 && action != action_observe)
+			break;
+		if (t - my_position.enter_time < 90 * 60 && profit < 0) {
+			action = action_observe;
+			break;
+		}
+		if (t - my_position.enter_time > 90 * 60) {
+			if (profit > 0 || -profit < indicators.tolerated_loss) {
+				action = my_position.mode == buy_and_sell ?
+					action_sell : action_buy;
+			} else {
+				action = action_observe;
+			}
+		}
 		break;
 	}
 	case complete: {
-		action = suggest_new_position(latest);
+		int i;
+		/* if (strcmp(trade->time, "09:10:00") < 0) */
+		/* 	break; */
+		action = trend_follower(latest);
+		if (action != action_observe)
+			break;
+		for (i = 0; i < ARRAY_SIZE(indicators.timely) &&
+			     action == action_observe; i++) {
+			action = price_comparer(latest, i);
+		}
 	}
 	}
 	if (action == action_buy || action == action_sell)
-		transact(action);
+		execute(action);
 	else
 		printf(" Observe.\n");
 	discard_old_records(market.trades_count - MAX_TRADES_COUNT);

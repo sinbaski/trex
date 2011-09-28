@@ -43,19 +43,20 @@ struct trend_indicator {
 };
 
 struct timely_indicator {
-	double average;
-	double highest;
-	double lowest;
+	/* lowest average highest */
+	double ind[3];
 	int available;
 	double open_margin;
-	double caution_margin;
 };
 
 struct indicators {
 	long volume;
+	/* lowst highest of the last batch */
+	double bound[2];
+	double tolerated_loss;
 	unsigned int allow_new_positions:1;
 	struct timely_indicator timely[3];
-	struct trend_indicator trends[2];
+	struct trend_indicator trends[3];
 };
 
 enum trade_mode {

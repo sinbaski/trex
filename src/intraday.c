@@ -242,6 +242,7 @@ end:
 	}
 }
 
+#if !USE_FAKE_SOURCE
 static int find_attr_value(const char *heystack, int len,
 			   const char *attr,
 			   char **start, int *size)
@@ -339,10 +340,13 @@ static size_t write_data(void *buffer, size_t size, size_t nmemb, void *userp)
 	}
 	return cap;
 }
+#endif
 
 static int login(CURL *handle)
 {
-	int ret = 0, code;
+	int ret = 0;
+#if !USE_FAKE_SOURCE
+	int code;
 	int i;
 	char *headerlines[] = {
 		"Host: www.avanza.se",
@@ -418,7 +422,11 @@ static int login(CURL *handle)
 	}
 end:
 	curl_slist_free_all(headers);
+#else
+	g_atomic_int_set(&my_status, registering);	
+#endif
 	return ret;
+
 }
 
 static int prepare_http_headers(CURL *handle, struct curl_slist **headers)
