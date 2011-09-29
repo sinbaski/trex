@@ -569,6 +569,16 @@ void analyze()
 
 	update_indicators();
 	trend = get_trend();
+	if ((my_position.mode == buy_and_sell && trend == trend_down &&
+	     my_position.status == complete) ||
+	    (my_position.mode == buy_and_sell && trend == trend_up &&
+	     my_position.status == incomplete) ||
+	    (my_position.mode == sell_and_buy && trend == trend_up &&
+	     my_position.status == complete) ||
+	    (my_position.mode == sell_and_buy && trend == trend_down &&
+	     my_position.status == incomplete))
+		goto decided;
+
 	switch (my_position.status) {
 	case incomplete: {
 		double profit = calculate_profit(latest);
@@ -577,31 +587,23 @@ void analyze()
 		case sell_and_buy:
 			if (trend == trend_up || (trend == trend_unclear &&
 						  latest < my_position.price
-						  * (1 - happy_margin))) {
+						  * (1 - happy_margin)))
 				action = action_buy;
-			} else {
-				action = action_observe;
-			}
 			break;
 		case buy_and_sell:
 			if (trend == trend_down || (trend == trend_unclear &&
 						    latest > my_position.price
-						    * (1 + happy_margin))) {
+						    * (1 + happy_margin)))
 				action = action_sell;
-			} else {
-				action = action_observe;
-			}
 			break;
 		}
 		if (profit > 0 && action != action_observe)
 			break;
-		if ((t - my_position.enter_time < 90 * 60 && profit < 0) ||
-		    (my_position.mode == buy_and_sell && trend == trend_up) ||
-		    (my_position.mode == sell_and_buy && trend == trend_down)) {
+		if (t - my_position.enter_time < 90 * 60 && profit < 0) {
 			action = action_observe;
 			break;
 		}
-		if (t - my_position.enter_time > 90 * 60) {
+		if (t - my_position.enter_time >= 90 * 60) {
 			if (profit > 0 || -profit < indicators.tolerated_loss) {
 				action = my_position.mode == buy_and_sell ?
 					action_sell : action_buy;
@@ -624,6 +626,7 @@ void analyze()
 		}
 	}
 	}
+decided:
 	if (action == action_buy || action == action_sell)
 		execute(action);
 	else
