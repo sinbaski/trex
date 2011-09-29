@@ -595,7 +595,9 @@ void analyze()
 		}
 		if (profit > 0 && action != action_observe)
 			break;
-		if (t - my_position.enter_time < 90 * 60 && profit < 0) {
+		if ((t - my_position.enter_time < 90 * 60 && profit < 0) ||
+		    (my_position.mode == buy_and_sell && trend == trend_up) ||
+		    (my_position.mode == sell_and_buy && trend == trend_down)) {
 			action = action_observe;
 			break;
 		}
