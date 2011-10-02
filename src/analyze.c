@@ -57,6 +57,7 @@ void set_position(const struct trade_position *position)
 	my_position.mode = position->mode;
 	my_position.status = position->status;
 	my_position.price = position->price;
+	my_position.enter_time = position->enter_time;
 	my_position.quantity = position->quantity;
 }
 
@@ -93,7 +94,7 @@ void restore_indicators(void)
 /* 	return avg; */
 /* } */
 
-static time_t parse_time(const char *timestring)
+time_t parse_time(const char *timestring)
 {
 	struct tm *tm;
 	time_t x;
@@ -258,7 +259,7 @@ static void calculate_indicator(FILE *datafile, time_t since,
 		if (ftell(datafile) == 0)
 			break;
 	}
-	x = (ind->ind[2] - ind->ind[0]) * 0.65;
+	x = (ind->ind[2] - ind->ind[0]) * 0.5;
 	if (x * my_position.quantity - fee > 100)
 		ind->open_margin = x / ind->ind[1];
 	ind->available = 1;
@@ -319,8 +320,8 @@ static void update_indicators()
 			    &indicators.timely[0]);
 	calculate_indicator(datafile, now - 60 * 60,
 			    &indicators.timely[1]);
-	find_trend(datafile);
 	calculate_bound(datafile, 80, indicators.bound);
+	find_trend(datafile);
 #ifdef DEBUG
 	indicators.allow_new_positions = 1;
 #else
@@ -534,9 +535,10 @@ static enum action_type price_comparer(double latest, int index)
 
 static enum action_type trend_follower(double price)
 {
+	static double margin = 0.004;
 	enum action_type action = action_observe;
 	enum trend trend = get_trend();
-	double lim, margin = 0.002;
+	double lim;
 
 	if (trend == trend_unclear)
 		return action_observe;
@@ -603,7 +605,7 @@ void analyze()
 			action = action_observe;
 			break;
 		}
-		if (t - my_position.enter_time >= 90 * 60) {
+		if (t - my_position.enter_time >= 3 * 3600) {
 			if (profit > 0 || -profit < indicators.tolerated_loss) {
 				action = my_position.mode == buy_and_sell ?
 					action_sell : action_buy;

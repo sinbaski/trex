@@ -87,6 +87,7 @@ struct trade_position {
 
 char orderbookId[20];
 
+time_t parse_time(const char *timestring);
 void set_position(const struct trade_position *position);
 void discard_old_records(int size);
 int trade_equal(const struct trade *t1, const struct trade *t2);

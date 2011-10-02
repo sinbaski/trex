@@ -644,7 +644,7 @@ int main(int argc, const char *argv[])
 		RLIM_INFINITY, RLIM_INFINITY
 	};
 	int i;
-	if (argc < 6) {
+	if (argc < 7) {
 		fprintf(stderr, "Usage: \n"
 			"%s orderbookId mode status price quantity\n", argv[0]);
 		return 0;
@@ -665,7 +665,8 @@ int main(int argc, const char *argv[])
 	sscanf(argv[2], "%d", (int *)&po.mode);
 	sscanf(argv[3], "%d", (int *)&po.status);
 	sscanf(argv[4], "%lf", &po.price);
-	sscanf(argv[5], "%ld", &po.quantity);
+	po.enter_time = parse_time(argv[5]);
+	sscanf(argv[6], "%ld", &po.quantity);
 	set_position(&po);
 
 	for (i = 0; i < sizeof(cared_signals)/sizeof(cared_signals[0]); i++)
