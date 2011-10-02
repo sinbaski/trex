@@ -8,6 +8,9 @@
 #include <glib.h>
 #include "analyze.h"
 
+/* 2 hours 30 minutes */
+#define TRAP_THRESHOLD 9000
+
 const double fee = 198;
 struct market market;
 struct trade_position my_position;
@@ -31,17 +34,6 @@ struct indicators indicators = {
 		},
 		{
 			.open_margin = 2 / 80,
-		},
-	},
-	.trends = {
-		{
-			.grp_size = 15
-		},
-		{
-			.grp_size = 20
-		},
-		{
-			.grp_size = 25
 		},
 	},
 	.tolerated_loss = 250
@@ -131,99 +123,6 @@ static long fnum_of_line(FILE *datafile)
 	return length / DATA_ROW_WIDTH;
 }
 
-static double straight_average(long size, FILE *datafile)
-{
-	int i;
-	double avg;
-	long total;
-		
-	for (i = 1, avg = 0, total = 0; i <= size; i++) {
-		struct trade trade;
-		fseek(datafile, -DATA_ROW_WIDTH, SEEK_CUR);
-		fscanf(datafile, "%s\t%s\t%lf\t%ld",
-		       trade.market, trade.time, &trade.price,
-		       &trade.quantity);
-		total++;
-		avg += (trade.price - avg)/total;
-		fseek(datafile, -DATA_ROW_WIDTH, SEEK_CUR);
-	}
-	return avg;
-}
-
-static void calculate_bound(FILE *datafile, long size, double *bound)
-{
-	long i;
-		
-	memset(bound, 0, 2 * sizeof(double));
-	fseek(datafile, 0, SEEK_END);
-	for (i = 1; i <= size; i++) {
-		struct trade trade;
-		fseek(datafile, -DATA_ROW_WIDTH, SEEK_CUR);
-		fscanf(datafile, "%s\t%s\t%lf\t%ld",
-		       trade.market, trade.time, &trade.price,
-		       &trade.quantity);
-		if (!bound[0])
-			bound[0] = trade.price;
-		else
-			bound[0] = MIN(trade.price, bound[0]);
-		bound[1] = MAX(trade.price, bound[1]);
-		fseek(datafile, -DATA_ROW_WIDTH, SEEK_CUR);
-	}
-}
-
-static enum trend get_trend(void)
-{
-	int i;
-	enum trend trend;
-	for (i = 0; i < ARRAY_SIZE(indicators.trends); i++) {
-		if ((trend = indicators.trends[i].trend) != trend_unclear)
-			break;
-	}
-	return trend;
-}
-
-#define GRP_NUM 4
-static void find_trend(FILE *datafile)
-{
-	int i;
-	for (i = 0; i < ARRAY_SIZE(indicators.trends); i++) {
-		int j;
-		double avg[GRP_NUM];
-		int flag;
-		const double margins[GRP_NUM - 1] = {
-			-0.025 / 80,
-			0.05 / 80,
-			0.05 / 80
-		};
-		if (fnum_of_line(datafile) <
-		    GRP_NUM * indicators.trends[i].grp_size) {
-			indicators.trends[i].trend = trend_unclear;
-			continue;
-		}
-		fseek(datafile, 0, SEEK_END);
-		for (j = GRP_NUM - 1; j >= 0; j--) {
-			avg[j] = straight_average(indicators.trends[i].grp_size,
-						  datafile);
-		}
-		for (j = 0, flag = 0; j < GRP_NUM - 1 &&
-			     (flag = avg[j + 1] > avg[j] * (1 + margins[j]));
-		     j++);
-		if (flag) {
-			indicators.trends[i].trend = trend_up;
-			continue;
-		}
-		for (j = 0, flag = 0; j < GRP_NUM - 1 &&
-			     (flag = avg[j + 1] < avg[j] * (1 - margins[j]));
-		     j++);
-		if (flag) {
-			indicators.trends[i].trend = trend_down;
-			continue;
-		}
-		indicators.trends[i].trend = trend_unclear;
-	}
-}
-#undef GRP_NUM
-
 static void calculate_indicator(FILE *datafile, time_t since,
 				struct timely_indicator *ind)
 {
@@ -262,6 +161,7 @@ static void calculate_indicator(FILE *datafile, time_t since,
 	x = (ind->ind[2] - ind->ind[0]) * 0.5;
 	if (x * my_position.quantity - fee > 100)
 		ind->open_margin = x / ind->ind[1];
+	ind->open_margin = MIN(ind->open_margin, 0.008);
 	ind->available = 1;
 }
 
@@ -270,10 +170,6 @@ static void dump_indicators(void)
 	int i;
 	struct trade *trade = (struct trade *)market.newest->data;
 	printf("[%s]: %f", trade->time, trade->price);
-	for (i = 0; i < ARRAY_SIZE(indicators.trends); i++) {
-		printf(" %s", trend_strings[indicators.trends[i].trend]);
-	}
-	printf(" [%lf %lf]", indicators.bound[0], indicators.bound[1]);
 	for (i = 0; i < ARRAY_SIZE(indicators.timely); i++) {
 		printf(" {%lf %f}.", indicators.timely[i].ind[1],
 		       indicators.timely[i].open_margin);
@@ -282,7 +178,6 @@ static void dump_indicators(void)
 
 static void update_indicators()
 {
-	GList *p;
 	time_t now;
 	FILE *datafile = fopen(get_filename("records", ".dat"), "r");
 	int i;
@@ -302,26 +197,12 @@ static void update_indicators()
 			indicators.timely[i].available = 0;
 		}
 	}
-	for (p = market.earliest_updated; p; p = p->next) {
-		struct trade *trade = (struct trade*)p->data;
-		/* average & volume */
-		indicators.volume += trade->quantity;
-		/* average of all trades so far */
-		indicators.timely[2].ind[1] +=
-			(trade->price * trade->quantity)/indicators.volume -
-			indicators.timely[2].ind[1] * trade->quantity / indicators.volume;
-		indicators.timely[2].ind[2] = MAX(indicators.timely[2].ind[2], trade->price);
-		indicators.timely[2].ind[0] = indicators.timely[2].ind[0] ?
-			MIN(indicators.timely[2].ind[0], trade->price) : trade->price;
-	}
-	/* There is no point comparing with the all-trades average */
-	indicators.timely[2].available = 0;
 	calculate_indicator(datafile, now - 20  * 60,
 			    &indicators.timely[0]);
-	calculate_indicator(datafile, now - 60 * 60,
+	calculate_indicator(datafile, now - 3600,
 			    &indicators.timely[1]);
-	calculate_bound(datafile, 80, indicators.bound);
-	find_trend(datafile);
+	calculate_indicator(datafile, now - 2 * 3600,
+			    &indicators.timely[2]);
 #ifdef DEBUG
 	indicators.allow_new_positions = 1;
 #else
@@ -533,79 +414,30 @@ static enum action_type price_comparer(double latest, int index)
 	return action;
 }
 
-static enum action_type trend_follower(double price)
-{
-	static double margin = 0.004;
-	enum action_type action = action_observe;
-	enum trend trend = get_trend();
-	double lim;
-
-	if (trend == trend_unclear)
-		return action_observe;
-	lim = trend == trend_up ?
-		indicators.bound[0] * (1 + margin):
-		indicators.bound[1] * (1 - margin);
-	switch (trend) {
-	case trend_up:
-		if (my_position.mode == buy_and_sell && price < lim)
-			action = action_buy;
-		break;
-	case trend_down:
-		if (my_position.mode == sell_and_buy && price > lim)
-			action = action_sell;
-		break;
-	default:;
-	}
-	if (action != action_observe)
-		printf(" %s:", __func__);
-	return action;
-}
-
 void analyze()
 {
 	enum action_type action = action_observe;
-	enum trend trend;
-	double happy_margin = 0.6 / 80;
 	struct trade *trade = (struct trade *)market.newest->data;
 	double latest = trade->price;
+	int i;
 
 	update_indicators();
-	trend = get_trend();
-	if ((my_position.mode == buy_and_sell && trend == trend_down &&
-	     my_position.status == complete) ||
-	    (my_position.mode == buy_and_sell && trend == trend_up &&
-	     my_position.status == incomplete) ||
-	    (my_position.mode == sell_and_buy && trend == trend_up &&
-	     my_position.status == complete) ||
-	    (my_position.mode == sell_and_buy && trend == trend_down &&
-	     my_position.status == incomplete))
-		goto decided;
+	for (i = 0; i < ARRAY_SIZE(indicators.timely) &&
+		     action == action_observe; i++) {
+		action = price_comparer(latest, i);
+	}
 
 	switch (my_position.status) {
 	case incomplete: {
 		double profit = calculate_profit(latest);
 		time_t t = parse_time(trade->time);
-		switch (my_position.mode) {
-		case sell_and_buy:
-			if (trend == trend_up || (trend == trend_unclear &&
-						  latest < my_position.price
-						  * (1 - happy_margin)))
-				action = action_buy;
-			break;
-		case buy_and_sell:
-			if (trend == trend_down || (trend == trend_unclear &&
-						    latest > my_position.price
-						    * (1 + happy_margin)))
-				action = action_sell;
-			break;
-		}
 		if (profit > 0 && action != action_observe)
 			break;
-		if (t - my_position.enter_time < 90 * 60 && profit < 0) {
+		if (t - my_position.enter_time < TRAP_THRESHOLD && profit < 0) {
 			action = action_observe;
 			break;
 		}
-		if (t - my_position.enter_time >= 3 * 3600) {
+		if (t - my_position.enter_time >= TRAP_THRESHOLD) {
 			if (profit > 0 || -profit < indicators.tolerated_loss) {
 				action = my_position.mode == buy_and_sell ?
 					action_sell : action_buy;
@@ -615,21 +447,9 @@ void analyze()
 		}
 		break;
 	}
-	case complete: {
-		int i;
-		/* if (strcmp(trade->time, "09:10:00") < 0) */
-		/* 	break; */
-		action = trend_follower(latest);
-		if (action != action_observe)
-			break;
-		for (i = 0; i < ARRAY_SIZE(indicators.timely) &&
-			     action == action_observe; i++) {
-			action = price_comparer(latest, i);
-		}
+	case complete:;
 	}
-	}
-decided:
-	if (action == action_buy || action == action_sell)
+	if (action != action_observe)
 		execute(action);
 	else
 		printf(" Observe.\n");

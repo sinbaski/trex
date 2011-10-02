@@ -56,7 +56,6 @@ struct indicators {
 	double tolerated_loss;
 	unsigned int allow_new_positions:1;
 	struct timely_indicator timely[3];
-	struct trend_indicator trends[3];
 };
 
 enum trade_mode {
