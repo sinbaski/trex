@@ -198,6 +198,7 @@ static void refine_data(FILE *fp, const GRegex *regex)
 				if (!p) {
 					fprintf(stderr, "%s: No memory.\n",
 						__func__);
+					fflush(stderr);
 					g_atomic_int_set(&my_status, finished);
 					return;
 				}
@@ -422,6 +423,7 @@ static int login(CURL *handle)
 	}
 end:
 	curl_slist_free_all(headers);
+	fflush(stderr);
 #else
 	g_atomic_int_set(&my_status, registering);	
 #endif
@@ -481,6 +483,7 @@ static int prepare_http_headers(CURL *handle, struct curl_slist **headers)
 		goto end;
 	}
 end:
+	fflush(stderr);
 	return ret;
 }
 
