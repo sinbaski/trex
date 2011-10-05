@@ -10,7 +10,7 @@
 
 /* 2 hours */
 #define TRAP_THRESHOLD 7200
-
+#define MIN_PROFIT_EXPECT 300
 const double fee = 198;
 struct market market;
 struct trade_position my_position;
@@ -27,13 +27,13 @@ struct indicators indicators = {
 	.volume = 0,
 	.timely = {
 		{
-			.open_margin = 1.2 / 80,
+			.margin = 1.2 / 80,
 		},
 		{
-			.open_margin = 1.5 / 80,
+			.margin = 1.5 / 80,
 		},
 		{
-			.open_margin = 2 / 80,
+			.margin = 2 / 80,
 		},
 	},
 	.tolerated_loss = 250
@@ -174,10 +174,15 @@ static void calculate_indicator(FILE *datafile, time_t since,
 		if (ftell(datafile) == 0)
 			break;
 	}
-	x = (ind->ind[2] - ind->ind[0]) * 0.5 * 1.1;
-	x = MIN(x, 0.008);
-	y = (200 + fee) / my_position.quantity / ind->ind[1];
-	ind->open_margin = MAX(x, y);
+	if (my_position.status == complete) {
+		x = (ind->ind[2] - ind->ind[0]) * 0.5 * 1.1;
+		x = MIN(x, 0.008);
+		y = (MIN_PROFIT_EXPECT + fee) / my_position.quantity
+			/ ind->ind[1];
+		ind->margin = MAX(x, y);
+	} else {
+		ind->margin = (ind->ind[2] - ind->ind[0]) * 0.5;
+	}
 	ind->available = 1;
 }
 
@@ -188,7 +193,7 @@ static void dump_indicators(void)
 	printf("[%s]: %f", trade->time, trade->price);
 	for (i = 0; i < ARRAY_SIZE(indicators.timely); i++) {
 		printf(" {%lf %f}.", indicators.timely[i].ind[1],
-		       indicators.timely[i].open_margin);
+		       indicators.timely[i].margin);
 	}
 }
 
@@ -283,114 +288,6 @@ int trade_equal(const struct trade *t1, const struct trade *t2)
 		t1->quantity == t2->quantity;
 }
 
-/* static enum action_type terminator(struct conclusion *conclusion) */
-/* { */
-/* 	int size = 360; */
-/* 	double avg; */
-/* 	double latest; */
-/* 	double margin = 0.3 / 80; */
-
-/* 	conclusion->analyzer = __func__; */
-/* 	if (market.trades_count < size || */
-/* 	    my_position.status == complete) */
-/* 		return conclusion->action = action_unclear; */
-
-/* 	latest = ((struct trade *)market.newest->data)->price; */
-/* 	avg = weighted_average(market.trades_count - size, size); */
-
-/* 	if (my_position.mode == sell_and_buy &&  */
-/* 	    latest > my_position.price * (1 + margin)) { */
-/* 		return conclusion->action = action_buy; */
-/* 	} */
-/* 	if (my_position.mode == buy_and_sell && */
-/* 	    latest < my_position.price * (1 - margin)) */
-/* 		return conclusion->action = action_sell; */
-/* 	return conclusion->action = action_unclear; */
-/* } */
-
-
-
-/* static enum action_type clear_trend(struct conclusion *conclusion) */
-/* { */
-/* #define GRP_NUM 4 */
-/* 	int group_size = 15; */
-/* 	int i; */
-/* 	int flag; */
-/* 	double avg[GRP_NUM]; */
-/* 	int offset = market.trades_count - GRP_NUM * group_size; */
-/* 	const double margins[GRP_NUM - 1] = { */
-/* 		-0.025 / 80, */
-/* 		0.05 / 80, */
-/* 		0.05 / 80 */
-/* 	}; */
-/* 	const double margin = 0.5 / 80; */
-/* 	double latest = ((struct trade *)market.newest->data)->price; */
-/* 	double regavg = 82; */
-
-/* 	conclusion->analyzer = __func__; */
-/* 	for (i = 0; i < GRP_NUM; i++) */
-/* 		avg[i] = straight_average(offset + i * group_size, group_size); */
-/* 	for (i = 0, flag = 0; */
-/* 	     i < GRP_NUM - 1 && (flag = avg[i + 1] > avg[i] * (1 + margins[i])); */
-/* 	     i++); */
-
-/* 	if (flag && latest < indicators.ind[2] * (1 - margin) && */
-/* 	    (regavg < 0 || latest < regavg)) { */
-/* 		return conclusion->action = action_buy; */
-/* 	} */
-/* 	else if (flag && my_position.status == complete) */
-/* 		return conclusion->action = action_observe; */
-/* 	for (i = 0, flag = 0; */
-/* 	     i < GRP_NUM - 1 && (flag = avg[i + 1] < avg[i] * (1 - margins[i])); */
-/* 	     i++); */
-/* 	if (flag && latest > indicators.ind[0] * (1 + margin) && */
-/* 	    (regavg < 0 || latest > regavg)) { */
-/* 		return conclusion->action = action_sell; */
-/* 	} */
-/* 	else if (flag && my_position.status == complete) */
-/* 		return conclusion->action = action_observe; */
-/* 	/\* Situation unclear *\/ */
-/* 	return action_unclear; */
-/* #undef GRP_NUM */
-/* } */
-
-/* static enum action_type local_moving(struct conclusion *conclusion) */
-/* { */
-/* 	const int span = MIN_ANALYSIS_SIZE; */
-/* 	int offset = market.trades_count - span; */
-/* 	double latest = ((struct trade *)market.newest->data)->price; */
-/* 	double average = weighted_average(offset, span); */
-/* 	const double margin = 0.35 / 80; */
-
-/* 	conclusion->analyzer = __func__; */
-/* 	conclusion->action = action_unclear; */
-/* 	if (latest < average * (1 - margin)) */
-/* 		conclusion->action = action_buy; */
-/* 	else if (latest > average * (1 + margin)) */
-/* 		conclusion->action = action_sell; */
-/* 	return conclusion->action; */
-/* } */
-
-
-/* static enum action_type happy_ending(struct conclusion *conclusion) */
-/* { */
-/* 	double latest = ((struct trade *)market.newest->data)->price; */
-/* 	double margin = 0.00625; */
-
-/* 	conclusion->analyzer = __func__; */
-/* 	conclusion->action = action_unclear; */
-/* 	if (my_position.status == complete) */
-/* 		return conclusion->action; */
-/* 	if (my_position.mode == sell_and_buy && */
-/* 	    latest <=  my_position.price * (1 - margin)) { */
-/* 		conclusion->action = action_buy; */
-/* 	} else if (my_position.mode == buy_and_sell && */
-/* 		   latest >=  my_position.price * (1 + margin)) { */
-/* 		conclusion->action = action_sell; */
-/* 	} */
-/* 	return conclusion->action; */
-/* } */
-
 static enum action_type price_comparer(double latest, int index)
 {
 	enum action_type action = action_observe;
@@ -402,13 +299,13 @@ static enum action_type price_comparer(double latest, int index)
 	switch (my_position.mode << 1 | my_position.status) {
 	case 0b00:
 	case 0b11:
-		lim = ind->ind[1] * (1 - ind->open_margin);
+		lim = ind->ind[1] * (1 - ind->margin);
 		if (latest <= lim)
 			action = action_buy;
 		break;
 	case 0b01:
 	case 0b10:
-		lim = ind->ind[1] * (1 + ind->open_margin);
+		lim = ind->ind[1] * (1 + ind->margin);
 		if (latest >= lim)
 			action = action_sell;
 		break;
@@ -437,7 +334,7 @@ void analyze()
 		int trapped = is_trapped();
 		if (profit > 0 && action != action_observe)
 			break;
-		if (profit >= 200) {
+		if (profit >= MIN_PROFIT_EXPECT) {
 			action = my_position.mode == buy_and_sell ?
 				action_sell : action_buy;
 			break;

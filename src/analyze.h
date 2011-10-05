@@ -46,7 +46,7 @@ struct timely_indicator {
 	/* lowest average highest */
 	double ind[3];
 	int available;
-	double open_margin;
+	double margin;
 };
 
 struct indicators {
