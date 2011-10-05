@@ -10,7 +10,6 @@
 
 /* 2 hours */
 #define TRAP_THRESHOLD 7200
-#define MIN_PROFIT_EXPECT 300
 const double fee = 198;
 struct market market;
 struct trade_position my_position;
@@ -28,12 +27,15 @@ struct indicators indicators = {
 	.timely = {
 		{
 			.margin = 1.2 / 80,
+			.min_profit = 300,
 		},
 		{
 			.margin = 1.5 / 80,
+			.min_profit = 500,
 		},
 		{
 			.margin = 2 / 80,
+			.min_profit = 700,
 		},
 	},
 	.tolerated_loss = 250
@@ -177,11 +179,11 @@ static void calculate_indicator(FILE *datafile, time_t since,
 	if (my_position.status == complete) {
 		x = (ind->ind[2] - ind->ind[0]) * 0.5 * 1.1;
 		x = MIN(x, 0.008);
-		y = (MIN_PROFIT_EXPECT + fee) / my_position.quantity
+		y = (ind->min_profit + fee) / my_position.quantity
 			/ ind->ind[1];
 		ind->margin = MAX(x, y);
 	} else {
-		ind->margin = (ind->ind[2] - ind->ind[0]) * 0.5;
+		ind->margin = (ind->ind[2] - ind->ind[0]) * 0.4 / ind->ind[1];
 	}
 	ind->available = 1;
 }
@@ -334,11 +336,6 @@ void analyze()
 		int trapped = is_trapped();
 		if (profit > 0 && action != action_observe)
 			break;
-		if (profit >= MIN_PROFIT_EXPECT) {
-			action = my_position.mode == buy_and_sell ?
-				action_sell : action_buy;
-			break;
-		}
 		if (!trapped && profit < 0) {
 			action = action_observe;
 			break;

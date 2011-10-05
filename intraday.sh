@@ -23,10 +23,6 @@ quantity=830
 
 wd=/home/xxie/work/avanza/data_extract/intraday
 
-# function start_trading {
-#     ./intraday $stock $mode $status $price $quantity
-# }
-
 function start_trading {
     ./intraday $stock $mode $status $price $enter_time$ $quantity &
 }

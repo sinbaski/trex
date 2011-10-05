@@ -42,7 +42,7 @@ int main (int argc, char *argv[])
 	time_t now;
 	FILE *req, *resp;
 	FILE  *datafile = NULL;
-	const int num_records = 80;
+	const int num_records = 30;
 
 	if (argc == 2) {
 		datafile = fopen(argv[1], "r");
