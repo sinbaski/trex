@@ -8,8 +8,8 @@
 #include <glib.h>
 #include "analyze.h"
 
-/* 2 hours 30 minutes */
-#define TRAP_THRESHOLD 9000
+/* 2 hours */
+#define TRAP_THRESHOLD 7200
 
 const double fee = 198;
 struct market market;
@@ -123,12 +123,28 @@ static long fnum_of_line(FILE *datafile)
 	return length / DATA_ROW_WIDTH;
 }
 
+static int is_trapped(void)
+{
+	int trapped;
+	struct trade *trade = (struct trade *)market.newest->data;
+	time_t t = parse_time(trade->time);
+	if (my_position.status != incomplete)
+		return 0;
+	if (t - my_position.enter_time >= TRAP_THRESHOLD)
+		return 1;
+	if (my_position.mode == buy_and_sell)
+		trapped = indicators.timely[1].ind[1] < my_position.price;
+	else
+		trapped = indicators.timely[1].ind[1] > my_position.price;
+	return trapped;
+}
+
 static void calculate_indicator(FILE *datafile, time_t since,
 				struct timely_indicator *ind)
 {
 	struct trade trade;
 	const char *sincestr;
-	double x;
+	double x, y;
 	int i;
 	long tot;
 
@@ -158,10 +174,10 @@ static void calculate_indicator(FILE *datafile, time_t since,
 		if (ftell(datafile) == 0)
 			break;
 	}
-	x = (ind->ind[2] - ind->ind[0]) * 0.5;
-	if (x * my_position.quantity - fee > 100)
-		ind->open_margin = x / ind->ind[1];
-	ind->open_margin = MIN(ind->open_margin, 0.008);
+	x = (ind->ind[2] - ind->ind[0]) * 0.5 * 1.1;
+	x = MIN(x, 0.008);
+	y = (200 + fee) / my_position.quantity / ind->ind[1];
+	ind->open_margin = MAX(x, y);
 	ind->available = 1;
 }
 
@@ -211,21 +227,6 @@ static void update_indicators()
 	fclose(datafile);
 
 	dump_indicators();
-	/* if (my_position.status == complete || timep->tm_hour < 15) { */
-	/* 	indicators.margin = 0.00625; */
-	/* 	indicators.tolerated_loss = 0; */
-	/* 	return; */
-	/* } */
-	/* diff = now - my_position.enter_time; */
-	/* if (diff >= 2 * SEC_AN_HOUR && diff < 3 * SEC_AN_HOUR) { */
-	/* 	indicators.margin = 0.0025; */
-	/* } else if (diff >= 3 * SEC_AN_HOUR && diff < 4 * SEC_AN_HOUR) { */
-	/* 	indicators.margin = 0; */
-	/* 	indicators.tolerated_loss = 200; */
-	/* } else if (diff >= 4 * SEC_AN_HOUR) { */
-	/* 	indicators.margin = -0.0025; */
-	/* 	indicators.tolerated_loss = 400; */
-	/* } */
 }
 
 static double calculate_profit(double price)
@@ -433,7 +434,7 @@ void analyze()
 	switch (my_position.status) {
 	case incomplete: {
 		double profit = calculate_profit(latest);
-		time_t t = parse_time(trade->time);
+		int trapped = is_trapped();
 		if (profit > 0 && action != action_observe)
 			break;
 		if (profit >= 200) {
@@ -441,11 +442,11 @@ void analyze()
 				action_sell : action_buy;
 			break;
 		}
-		if (t - my_position.enter_time < TRAP_THRESHOLD && profit < 0) {
+		if (!trapped && profit < 0) {
 			action = action_observe;
 			break;
 		}
-		if (t - my_position.enter_time >= TRAP_THRESHOLD) {
+		if (trapped) {
 			if (profit > 0 || -profit < indicators.tolerated_loss) {
 				action = my_position.mode == buy_and_sell ?
 					action_sell : action_buy;
