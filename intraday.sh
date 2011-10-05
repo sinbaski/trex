@@ -14,6 +14,10 @@ status=0
 # ignored when status = 0
 price=0
 
+# time when the current incomplete position
+# is entered.
+enter_time="06:00:00"
+
 # entering quantity
 quantity=830
 
@@ -24,8 +28,7 @@ wd=/home/xxie/work/avanza/data_extract/intraday
 # }
 
 function start_trading {
-    ./intraday $stock $mode $status $price $quantity \
-	>> transactions/$stock-$(date +%F).txt 2>>logs/$stock-$(date +%F).log &
+    ./intraday $stock $mode $status $price $enter_time$ $quantity &
 }
 
 if [ "$wd" != `pwd` ]; then cd $wd; fi

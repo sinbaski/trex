@@ -392,23 +392,26 @@ int trade_equal(const struct trade *t1, const struct trade *t2)
 
 static enum action_type price_comparer(double latest, int index)
 {
-	enum action_type action;
+	enum action_type action = action_observe;
 	struct timely_indicator *ind = indicators.timely + index;
 	double lim;
 
 	if (!ind->available)
 		return action_observe;
-	lim = my_position.mode == buy_and_sell ?
-		ind->ind[1] * (1 - ind->open_margin) :
-		ind->ind[1] * (1 + ind->open_margin);
-
-	if (my_position.mode == buy_and_sell && latest < lim)
-		action = action_buy;
-	else if (my_position.mode == sell_and_buy && latest > lim)
-		action = action_sell;
-	else
-		action = action_observe;
-
+	switch (my_position.mode << 1 | my_position.status) {
+	case 0b00:
+	case 0b11:
+		lim = ind->ind[1] * (1 - ind->open_margin);
+		if (latest <= lim)
+			action = action_buy;
+		break;
+	case 0b01:
+	case 0b10:
+		lim = ind->ind[1] * (1 + ind->open_margin);
+		if (latest >= lim)
+			action = action_sell;
+		break;
+	}
 	if (action != action_observe)
 		printf(" %s-%d:", __func__, index);
 	return action;
@@ -433,6 +436,11 @@ void analyze()
 		time_t t = parse_time(trade->time);
 		if (profit > 0 && action != action_observe)
 			break;
+		if (profit >= 200) {
+			action = my_position.mode == buy_and_sell ?
+				action_sell : action_buy;
+			break;
+		}
 		if (t - my_position.enter_time < TRAP_THRESHOLD && profit < 0) {
 			action = action_observe;
 			break;
