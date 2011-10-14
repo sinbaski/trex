@@ -39,7 +39,7 @@ enum status {
 
 volatile enum status my_status;
 
-#if 0
+#ifndef DEBUG
 static void daemonize(void)
 {
 	pid_t pid, sid;
@@ -100,7 +100,8 @@ static void log_data(const GList *node)
 	fclose(datafile);
 }
 
-static int extract_data(const char *buffer, struct trade *trade, const GRegex *regex)
+static int extract_data(const char *buffer, struct trade *trade,
+			const GRegex *regex)
 {
 	GMatchInfo *match_info;
 	int ret;
@@ -583,6 +584,10 @@ static void collect_data(void)
 		char message[10];
 		/* Request data */
 		req = fopen("./req-fifo", "w");
+		if (!req) {
+			my_status = finished;
+			continue;
+		}
 		fprintf(req, "get");
 		fclose(req);
 		/* Wait until the data is returned */
@@ -639,9 +644,7 @@ int main(int argc, const char *argv[])
 		.sa_flags = SA_SIGINFO
 	};
 	int cared_signals[] = {
-		SIGHUP, SIGINT, SIGPIPE,
-		SIGTERM, SIGUSR1, SIGUSR2, SIGPOLL,
-		SIGPROF, SIGSTKFLT, SIGIO, SIGPWR,
+		SIGTERM
 	};
 	struct rlimit rlim = {
 		RLIM_INFINITY, RLIM_INFINITY
@@ -653,11 +656,9 @@ int main(int argc, const char *argv[])
 		return 0;
 	}
 	strcpy(orderbookId, argv[1]);
-#if 0
+#ifndef DEBUG
 	daemonize();
-	for (time(&now); localtime(&now)->tm_hour < 9; time(&now))
-		sleep(DATA_UPDATE_INTERVAL);
-#endif	
+#endif
 	freopen( "/dev/null", "r", stdin);
 	freopen(get_filename("transactions", ".txt"), "a", stdout);
 	freopen(get_filename("logs", ".log"), "a", stderr);
