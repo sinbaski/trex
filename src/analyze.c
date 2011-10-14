@@ -5,6 +5,7 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <assert.h>
 #include <glib.h>
 #include "analyze.h"
 
@@ -141,7 +142,31 @@ static int is_trapped(void)
 	return trapped;
 }
 
-static void calculate_indicator(FILE *datafile, time_t since,
+static double cal_der_sum(FILE *datafile, long n)
+{
+	long i;
+	double sum;
+	struct trade trade;
+	
+	assert(fnum_of_line(datafile) >= n);
+	for (i = 1, sum = 0; i <= n; i++) {
+		double p1, p2;
+		fseek(datafile, -i * DATA_ROW_WIDTH, SEEK_END);
+		fscanf(datafile, "%s\t%s\t%lf\t%ld",
+		       trade.market, trade.time, &trade.price,
+		       &trade.quantity);
+		if (i == 1)
+			p2 = trade.price;
+		else {
+			p1 = trade.price;
+			sum += (p2 - p1)/p1;
+			p2 = p1;
+		}
+	}
+	return sum;
+}
+
+static void cal_indicator(FILE *datafile, time_t since,
 				struct timely_indicator *ind)
 {
 	struct trade trade;
@@ -177,13 +202,14 @@ static void calculate_indicator(FILE *datafile, time_t since,
 			break;
 	}
 	if (my_position.status == complete) {
-		x = (ind->ind[2] - ind->ind[0]) * 0.5 * 1.1;
+		x = (ind->ind[2] - ind->ind[0]) * 0.25 / ind->ind[1];
 		x = MIN(x, 0.008);
 		y = (ind->min_profit + fee) / my_position.quantity
 			/ ind->ind[1];
 		ind->margin = MAX(x, y);
+		ind->margin = x;
 	} else {
-		ind->margin = (ind->ind[2] - ind->ind[0]) * 0.4 / ind->ind[1];
+		ind->margin = (ind->ind[2] - ind->ind[0]) * 0.25 / ind->ind[1];
 	}
 	ind->available = 1;
 }
@@ -192,7 +218,7 @@ static void dump_indicators(void)
 {
 	int i;
 	struct trade *trade = (struct trade *)market.newest->data;
-	printf("[%s]: %f", trade->time, trade->price);
+	printf("[%s]: %f %lf", trade->time, trade->price, indicators.der);
 	for (i = 0; i < ARRAY_SIZE(indicators.timely); i++) {
 		printf(" {%lf %f}.", indicators.timely[i].ind[1],
 		       indicators.timely[i].margin);
@@ -220,12 +246,13 @@ static void update_indicators()
 			indicators.timely[i].available = 0;
 		}
 	}
-	calculate_indicator(datafile, now - 20  * 60,
+	cal_indicator(datafile, now - 15  * 60,
 			    &indicators.timely[0]);
-	calculate_indicator(datafile, now - 3600,
+	cal_indicator(datafile, now - 3600,
 			    &indicators.timely[1]);
-	calculate_indicator(datafile, now - 2 * 3600,
+	cal_indicator(datafile, now - 2 * 3600,
 			    &indicators.timely[2]);
+	indicators.der = cal_der_sum(datafile, 40);
 #ifdef DEBUG
 	indicators.allow_new_positions = 1;
 #else
@@ -236,7 +263,7 @@ static void update_indicators()
 	dump_indicators();
 }
 
-static double calculate_profit(double price)
+static double cal_profit(double price)
 {
 	double diff;
 	switch (my_position.mode)
@@ -294,23 +321,33 @@ static enum action_type price_comparer(double latest, int index)
 {
 	enum action_type action = action_observe;
 	struct timely_indicator *ind = indicators.timely + index;
-	double lim;
-
+	double lim, profit;
+	
 	if (!ind->available)
 		return action_observe;
 	switch (my_position.mode << 1 | my_position.status) {
 	case 0b00:
-	case 0b11:
 		lim = ind->ind[1] * (1 - ind->margin);
-		if (latest <= lim)
+		if (latest <= lim && indicators.der >= 0.0008)
 			action = action_buy;
 		break;
-	case 0b01:
 	case 0b10:
 		lim = ind->ind[1] * (1 + ind->margin);
-		if (latest >= lim)
+		if (latest >= lim && indicators.der <= -0.0008)
 			action = action_sell;
 		break;
+	case 0b01:
+		profit = cal_profit(latest);
+		if (indicators.der > 0.0008)
+			action = action_observe;
+		else if (profit > ind->min_profit)
+			action = action_sell;
+	case 0b11:
+		profit = cal_profit(latest);
+		if (indicators.der < -0.0008)
+			action = action_observe;
+		else if (profit > ind->min_profit)
+			action = action_buy;
 	}
 	if (action != action_observe)
 		printf(" %s-%d:", __func__, index);
@@ -332,7 +369,7 @@ void analyze()
 
 	switch (my_position.status) {
 	case incomplete: {
-		double profit = calculate_profit(latest);
+		double profit = cal_profit(latest);
 		int trapped = is_trapped();
 		if (profit > 0 && action != action_observe)
 			break;

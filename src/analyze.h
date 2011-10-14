@@ -52,8 +52,7 @@ struct timely_indicator {
 
 struct indicators {
 	long volume;
-	/* lowst highest of the last batch */
-	double bound[2];
+	double der;
 	double tolerated_loss;
 	unsigned int allow_new_positions:1;
 	struct timely_indicator timely[3];
