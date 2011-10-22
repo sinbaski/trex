@@ -15,7 +15,7 @@
 #include <glib/gprintf.h>
 #include "analyze.h"
 
-#define MAX_COOKIE_NUM 6
+#define MAX_COOKIE_NUM 12
 #define MAX_COOKIE_LEN 100
 #define MIN_NEW_TRADES 10
 #define DATA_UPDATE_INTERVAL 36
@@ -28,9 +28,7 @@ extern int indicators_initialized(void);
 extern void save_indicators(void);
 extern void restore_indicators(void);
 
-char cookies[MAX_COOKIE_NUM][MAX_COOKIE_LEN];
-char *cookie_container[MAX_COOKIE_NUM + 1];
-
+GList *cookies = NULL;
 enum status {
 	registering,
 	collecting,
@@ -78,7 +76,11 @@ static void daemonize(void)
 static void free_trade (void *p)
 {
 	g_slice_free(struct trade, p);
-	/* fprintf(stderr, "%s: freed %p.\n", __func__, p); */
+}
+
+static void free_cookie (void *p)
+{
+	g_string_free((GString *)p, TRUE);
 }
 
 static void log_data(const GList *node)
@@ -245,68 +247,39 @@ end:
 }
 
 #if !USE_FAKE_SOURCE
-static int find_attr_value(const char *heystack, int len,
-			   const char *attr,
-			   char **start, int *size)
-{
-	char *p;
-	if (!(p = g_strstr_len(heystack, len, attr)))
-		return 0;
-	*start = p;
-	if (!(p = g_strstr_len(*start, len - (*start - heystack), ";")) &&
-	    !(p = g_strstr_len(*start, len - (*start - heystack), "\r")) &&
-	    !(p = g_strstr_len(*start, len - (*start - heystack), "\n")))
-		*size = len - (*start - heystack);
-	else
-		*size = p - *start;
-	return 1;
-}
-
 static void set_cookie(const char *start, int size)
 {
-	const char *p, *q;
-	char *cookie;
-	int len, x, i;
-	const char *attributes[] = {
-		"Version", "Path", "Domain"
-	};
-
-	for (p = start, i = 0; i < size && *p != '='; p++);
+	int len, i, k, l;
+	GList *node = NULL;
+	GString *gstr;
+	for (i = 0; i < size && start[i] != '='; i++);
 	if (i == size) {
 		fprintf(stderr, "Invalid Cookie.\n");
 		return;
 	}
-	/* strncpy(name, start, len = p - start); */
-	for (i = 0; i < MAX_COOKIE_NUM && cookies[i][0] &&
-		     strncmp(start, cookies[i], len); i++);
+	/* len: length up to the = sign (incl.) */
+	len = i + 1;
+	for (l = size - 1; start[l] == '\0' || start[l] == '\n' ||
+		     start[l] == '\r'; l--);
+	l++;
+	for (i = len; i < l && start[i] != ';'; i++);
+	k = i;
+
+	for (i = 0, node = cookies; node; node = node->next, i++) {
+		gstr = (GString *)node->data;
+		if (gstr->len <= len)
+			continue;
+		if (strncmp(start, gstr->str, len) == 0) {
+			g_string_overwrite_len(gstr, len, start + len, k - len);
+			return;
+		}
+	}
 	if (i == MAX_COOKIE_NUM) {
 		fprintf(stderr, "No space for more cookies.\n");
 		return;
 	}
-	cookie = cookies[i];
-	if (!(q = g_strstr_len(p, size - len - 1, ";"))) {
-		/* No attributes */
-		memcpy(cookie, start, size);
-		cookie[size] = 0;
-		return;
-	}
-	memcpy(cookie, start, x = q - start);
-	/* Attributes */
-	for (i = 0; i < sizeof(attributes)/sizeof(char *); i++) {
-		char *cp = NULL;
-		if (find_attr_value(q + 1, size - (q - start),
-				    attributes[i], &cp, &len)) {
-			if (x >= MAX_COOKIE_LEN) {
-				fprintf(stderr, "The cookie is too long:\n");
-				cookie[MAX_COOKIE_LEN] = 0;
-				return;
-			}
-			memcpy(cookie + x, "; ", 2);
-			memcpy(cookie + x + 2, cp, len);
-			x += len + 2;
-		}
-	}
-	cookie[x] = 0;
+	gstr = g_string_new_len(start, k);
+	cookies = g_list_prepend(cookies, gstr);
 }
 
 static size_t write_header(void *buffer, size_t size, size_t nmemb, void *userp)
@@ -432,13 +405,45 @@ end:
 
 }
 
+static char *join_cookies(void)
+{
+	GList *node;
+	int sum;
+	char *buffer, *p;
+	const char *cookiestr = "Cookie: ";
+
+	for (sum = strlen(cookiestr), node = cookies; node;
+	     node = node->next) {
+		/* 2 for "; " */
+		sum += ((GString *)node->data)->len + 2;
+	}
+	/* -2 for the last "; ", which is Not needed; 1 for the ending NULL */
+	sum = sum - 2 + 1;
+	buffer = malloc(sum);
+	memset(buffer, 0, sum);
+	if (!buffer) {
+		fprintf(stderr, "%s: No memory.\n", __func__);
+		return NULL;
+	}
+	strcpy(buffer, cookiestr);
+	for (p = buffer + strlen(cookiestr), node = cookies; node;
+	     node = node->next) {
+		GString *gstr = (GString *)node->data;
+		strncpy(p, gstr->str, gstr->len);
+		p += gstr->len;
+		if (node->next) {
+			strcpy(p, "; ");
+			p += 2;
+		}
+	}
+	return buffer;
+}
+
 static int prepare_http_headers(CURL *handle, struct curl_slist **headers)
 {
-
 	int i;
 	int code, ret = 0;
-	char temp[200];
-	char *joined_cookies = NULL;
+	char temp[1024];
 	char *cookie = NULL;
 	char *headerlines[] = {
 		"Host: www.avanza.se",
@@ -458,14 +463,9 @@ static int prepare_http_headers(CURL *handle, struct curl_slist **headers)
 	for (i = 0; i < sizeof(headerlines)/sizeof(char *); i++) {
 		*headers = curl_slist_append(*headers, headerlines[i]);		
 	}
-	for (i = 0; i < MAX_COOKIE_NUM && cookies[i][0]; i++)
-		cookie_container[i] = cookies[i];
-	cookie_container[i] = NULL;
-	joined_cookies = g_strjoinv("; ", cookie_container);
-	cookie = g_strjoin("", "Cookie: ", joined_cookies, NULL);
-	g_free(joined_cookies);
+	cookie = join_cookies();
 	*headers = curl_slist_append(*headers, cookie);
-	g_free(cookie);
+	free(cookie);
 	if ((code = curl_easy_setopt(handle, CURLOPT_HTTPHEADER, *headers))) {
 		fprintf(stderr, "Failed to set CURLOPT_HTTPHEADER. "
 			"Error %d.\n", code);
@@ -496,7 +496,9 @@ static void prepare_connection(char *error_buffer, struct curl_slist **headers)
 		curl_easy_cleanup(connection_handle);
 		curl_global_cleanup();
 	}
-	memset(&cookies[0][0], 0, MAX_COOKIE_NUM * MAX_COOKIE_LEN);
+	if (cookies) {
+		g_list_free_full(cookies, free_cookie);
+	}
 	while (!handle) {
 		if ((code = curl_global_init(CURL_GLOBAL_ALL))) {
 			fprintf(stderr, "curl_global_init failed "
@@ -612,6 +614,7 @@ static void collect_data(void)
 	curl_global_cleanup();
 	curl_slist_free_all(headers);
 	g_list_free_full(market.trades, free_trade);
+	g_list_free_full(cookies, free_cookie);
 	g_regex_unref(regex);
 	fclose(stdout);
 	fclose(stderr);
