@@ -8,7 +8,6 @@
 #include <sys/time.h>
 #include <sys/resource.h>
 #include <fcntl.h>
-#include <mqueue.h>
 #include <errno.h>
 #include <curl/curl.h>
 #include <glib.h>
@@ -18,9 +17,9 @@
 #define MAX_COOKIE_NUM 12
 #define MAX_COOKIE_LEN 100
 #define MIN_NEW_TRADES 10
-#define DATA_UPDATE_INTERVAL 36
 #define TRANSFER_TIMEOUT 60 * 5 /* 5 minutes */
 #define WORKDIR "/home/xxie/work/avanza/data_extract/intraday"
+#define DATA_UPDATE_INTERVAL 36
 
 CURL *connection_handle = NULL;
 extern struct market market;
@@ -28,11 +27,22 @@ extern int indicators_initialized(void);
 extern void save_indicators(void);
 extern void restore_indicators(void);
 
+char orderbookId[20];
+
 GList *cookies = NULL;
 enum status {
 	registering,
 	collecting,
 	finished
+};
+
+struct connection {
+	CURL *handle;
+	struct curl_slist *data_headers;
+	struct curl_slist *order_headers;
+	char errbuf[CURL_ERROR_SIZE];
+} conn = {
+	NULL, NULL, NULL
 };
 
 volatile enum status my_status;
@@ -341,13 +351,11 @@ static int login(CURL *handle)
 	const char *loginfo = "username=sinbaski&password=2Oceans%3F";
 	const char *url ="https://www.avanza.se/aza/login/login.jsp";
 
-	char error_buffer[CURL_ERROR_SIZE];
-
 	for (i = 0; i < sizeof(headerlines)/sizeof(char *); i++) {
 		headers = curl_slist_append(headers, headerlines[i]);		
 	}
 	if ((code = curl_easy_setopt(handle, CURLOPT_ERRORBUFFER,
-				     error_buffer))) {
+				     conn.errbuf))) {
 		fprintf(stderr, "Failed to set CURLOPT_ERRORBUFFER. Error %d.\n", code);
 		ret = code;
 		goto end;
@@ -390,7 +398,7 @@ static int login(CURL *handle)
 	if ((code = curl_easy_perform(handle))) {
 		fprintf(stderr, "[%s] %s: curl_easy_perform() failed. "
 			"Error %d: %s\n", get_timestring(), __func__,
-			code, error_buffer);
+			code, conn.errbuf);
 		sleep(100 + rand() % 140); 
 		ret = code;
 		goto end;
@@ -447,13 +455,21 @@ static int prepare_http_headers(CURL *handle, struct curl_slist **headers)
 	char *cookie = NULL;
 	char *headerlines[] = {
 		"Host: www.avanza.se",
-		"Connection: keep-alive",
-		"User-Agent: Mozilla/5.0 (Windows NT 5.1) "
-		"AppleWebKit/535.1 (KHTML, like Gecko) Chrome/13.0.782.107 Safari/535.1",
-		"Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-		"Accept-Encoding: gzip,deflate",
-		"Accept-Language: en-us,en;q=0.5",
-		"Accept-Charset: GBK,utf-8;q=0.7,*;q=0.3",
+
+		"Accept: application/x-ms-application, image/jpeg, "
+		"application/xaml+xml, image/gif, image/pjpeg, "
+		"application/x-ms-xbap, application/vnd.ms-excel, "
+		"application/vnd.ms-powerpoint, "
+		"application/msword, application/x-shockwave-flash, */*",
+
+		"Accept-Language: sv-SE",
+		"Accept-Encoding: gzip, deflate",
+
+		"User-Agent: Mozilla/5.0 (Windows NT 6.1; WOW64; rv:7.0) "
+		"Gecko/20100101 Firefox/7.0",
+
+		"Connection: Keep-Alive",
+		"Cache-Control: no-cache",
 		temp
 	};
 	sprintf(temp, "Referer: https://www.avanza.se"
@@ -488,53 +504,52 @@ end:
 	return ret;
 }
 
-static void prepare_connection(char *error_buffer, struct curl_slist **headers)
+static void prepare_connection(struct curl_slist **headers)
 {
 	CURLcode code;
-	CURL *handle = NULL;
-	if (connection_handle) {
-		curl_easy_cleanup(connection_handle);
+	if (conn.handle) {
+		curl_easy_cleanup(conn.handle);
 		curl_global_cleanup();
+		conn.handle = NULL;
 	}
 	if (cookies) {
 		g_list_free_full(cookies, free_cookie);
 	}
-	while (!handle) {
+	while (!conn.handle) {
 		if ((code = curl_global_init(CURL_GLOBAL_ALL))) {
 			fprintf(stderr, "curl_global_init failed "
 				"with %u\n", code);
 			goto end0;
 		}
-		if (!(handle = curl_easy_init())) {
+		if (!(conn.handle = curl_easy_init())) {
 			fprintf(stderr, "curl_easy_init() failed.\n");
 			goto end1;
 		}
-		if ((code = login(handle))) {
+		if ((code = login(conn.handle))) {
 			goto end2;
 		}
-		if ((code = prepare_http_headers(handle, headers))) {
+		if ((code = prepare_http_headers(conn.handle, headers))) {
 			goto end2;
 		}
-		if ((code = curl_easy_setopt(handle, CURLOPT_ERRORBUFFER,
-					     error_buffer))) {
+		if ((code = curl_easy_setopt(conn.handle, CURLOPT_ERRORBUFFER,
+					     conn.errbuf))) {
 			goto end2;
 		}
-		if ((code = curl_easy_setopt(handle, CURLOPT_TIMEOUT,
+		if ((code = curl_easy_setopt(conn.handle, CURLOPT_TIMEOUT,
 					     TRANSFER_TIMEOUT))) {
 			goto end2;
 		}
 		break;
 
 	end2:
-		curl_easy_cleanup(handle);
-		handle = NULL;
+		curl_easy_cleanup(conn.handle);
+		conn.handle = NULL;
 		fflush(stderr);
 	end1:
 		curl_global_cleanup();
 	end0:
 		continue;
 	}
-	connection_handle = handle;
 	g_atomic_int_set(&my_status, collecting);
 }
 
@@ -542,7 +557,6 @@ static void collect_data(void)
 {
 	GRegex *regex;
 	GError *error = NULL;
-	char error_buffer[CURL_ERROR_SIZE];
 	struct curl_slist *headers = NULL;
 	int i;
 	regex = g_regex_new("^<TR.*><TD.*>[^<]*</TD>"
@@ -553,7 +567,7 @@ static void collect_data(void)
 			    "<TD.*>([0-9]+)</TD></TR>$",
 			    0, 0, &error);
 
-	prepare_connection(error_buffer, &headers);
+	prepare_connection(&headers);
 	for (i = 0; g_atomic_int_get(&my_status) == collecting; i = 1) {
 		struct stat st;
 		FILE *fp;
@@ -562,21 +576,21 @@ static void collect_data(void)
 		fp = fopen("./intraday.html", "w");
 		if (i == 0)
 			memset(&market, 0, sizeof(market));
-		if ((code = curl_easy_setopt(connection_handle, CURLOPT_WRITEDATA, fp))) {
+		if ((code = curl_easy_setopt(conn.handle, CURLOPT_WRITEDATA, fp))) {
 			fprintf(stderr, "curl_easy_setopt failed with CURLOPT_WRITEDATA. Error %d.\n",
 				code);
 			fclose(fp);
 			continue;
 		}
-		if ((code = curl_easy_perform(connection_handle))) {
+		if ((code = curl_easy_perform(conn.handle))) {
 			char *timestring;
 			timestring = get_timestring();
 			fprintf(stderr, "[%s] %s: curl_easy_perform() failed. "
 				"Error %d: %s\n", timestring, __func__,
-				code, error_buffer);
+				code, conn.errbuf);
 			fflush(stderr);
 			sleep(100 + rand() % 140);
-			prepare_connection(error_buffer, &headers);
+			prepare_connection(&headers);
 			fclose(fp);
 			continue;
 		}
@@ -610,7 +624,7 @@ static void collect_data(void)
 		sleep(DATA_UPDATE_INTERVAL);
 #endif
 	}
-	curl_easy_cleanup(connection_handle);
+	curl_easy_cleanup(conn.handle);
 	curl_global_cleanup();
 	curl_slist_free_all(headers);
 	g_list_free_full(market.trades, free_trade);
@@ -634,6 +648,8 @@ static void signal_handler(int sig, siginfo_t * siginfo, void *context)
 		g_atomic_int_set(&my_status, finished);
 		save_indicators();
 		break;
+	case SIGPIPE:
+		break;
 	default:;
 	}
 	fflush(stderr);
@@ -647,7 +663,7 @@ int main(int argc, const char *argv[])
 		.sa_flags = SA_SIGINFO
 	};
 	int cared_signals[] = {
-		SIGTERM
+		SIGTERM, SIGPIPE
 	};
 	struct rlimit rlim = {
 		RLIM_INFINITY, RLIM_INFINITY

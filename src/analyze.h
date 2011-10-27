@@ -47,7 +47,6 @@ struct timely_indicator {
 	double ind[3];
 	int available;
 	double margin;
-	double min_profit;
 };
 
 struct indicators {
