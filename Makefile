@@ -3,9 +3,9 @@ CC := gcc
 srcdir := src
 objdir := obj
 
-# debug := -DDEBUG
-debug :=
 USE_FAKE_SOURCE := 0
+DAEMONIZE := 1
+REAL_TRADE := 0
 
 srcs := $(wildcard $(srcdir)/*.c)
 objs := $(notdir $(patsubst %.c, %.o, $(srcs)))
@@ -13,7 +13,9 @@ objs := $(addprefix $(objdir)/, $(objs))
 
 CFLAGS := -c -Wall -Werror -Iinclude -g3 $(debug) \
 $(shell pkg-config --cflags glib-2.0) \
--DUSE_FAKE_SOURCE=$(USE_FAKE_SOURCE)
+-DUSE_FAKE_SOURCE=$(USE_FAKE_SOURCE) \
+-DDAEMONIZE=$(DAEMONIZE) \
+-DREAL_TRADE=$(REAL_TRADE)
 
 LDFLAGS := -lcurl -Wl,-Bsymbolic-functions $(shell pkg-config --libs glib-2.0)
 

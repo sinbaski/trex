@@ -1,6 +1,7 @@
-#include <stdio.h>
+ #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <assert.h>
 #include <string.h>
 #include <signal.h>
 #include <sys/types.h>
@@ -14,40 +15,47 @@
 #include <glib/gprintf.h>
 #include "analyze.h"
 
-#define MAX_COOKIE_NUM 12
-#define MAX_COOKIE_LEN 100
 #define MIN_NEW_TRADES 10
 #define TRANSFER_TIMEOUT 60 * 5 /* 5 minutes */
 #define WORKDIR "/home/xxie/work/avanza/data_extract/intraday"
 #define DATA_UPDATE_INTERVAL 36
 
-CURL *connection_handle = NULL;
-extern struct market market;
-extern int indicators_initialized(void);
-extern void save_indicators(void);
-extern void restore_indicators(void);
-
-char orderbookId[20];
-
-GList *cookies = NULL;
 enum status {
 	registering,
 	collecting,
 	finished
 };
 
-struct connection {
-	CURL *handle;
-	struct curl_slist *data_headers;
-	struct curl_slist *order_headers;
-	char errbuf[CURL_ERROR_SIZE];
-} conn = {
-	NULL, NULL, NULL
+enum order_status {
+	order_executed = 0,
+	order_in_market,
+	order_waiting,
+	order_killed
 };
 
+struct connection {
+	CURL *handle;
+	char errbuf[CURL_ERROR_SIZE];
+} conn = {
+	.handle = NULL,
+};
+
+struct stock_info {
+	const char *name;
+	const char *dataid;
+	const char *orderid;
+} stockinfo[] = {
+	{
+		"Boliden",
+		"183828",
+		"5564"
+	},
+};
+
+char orderbookId[20];
 volatile enum status my_status;
 
-#ifndef DEBUG
+#if DAEMONIZE
 static void daemonize(void)
 {
 	pid_t pid, sid;
@@ -83,14 +91,28 @@ static void daemonize(void)
 }
 #endif
 
+static void declare(const char *str)
+{
+	FILE *fp = fopen("./declare", "w");
+	fprintf(fp, "%s\n", str);
+	fclose(fp);
+
+}
+
+static const struct stock_info *get_stock_info(const char *id)
+{
+	int i;
+	for (i = 0; i < ARRAY_SIZE(stockinfo); i++) {
+		if (strcmp(stockinfo[i].dataid, id) == 0) {
+			return stockinfo + i;
+		}
+	}
+	return NULL;
+}
+
 static void free_trade (void *p)
 {
 	g_slice_free(struct trade, p);
-}
-
-static void free_cookie (void *p)
-{
-	g_string_free((GString *)p, TRUE);
 }
 
 static void log_data(const GList *node)
@@ -111,6 +133,44 @@ static void log_data(const GList *node)
 	}
 	fclose(datafile);
 }
+
+static void refresh_conn(void)
+{
+	curl_easy_reset(conn.handle);
+	curl_easy_setopt(conn.handle, CURLOPT_ERRORBUFFER, conn.errbuf);
+	curl_easy_setopt(conn.handle, CURLOPT_TIMEOUT, TRANSFER_TIMEOUT);
+}
+
+#if REAL_TRADE
+static void extract_header_field(const char *field, GList **values, FILE *fp)
+{
+	GRegex *regex;
+	GString *gstr = g_string_sized_new(128);
+	char buffer[1000];
+	GError *error = NULL;
+
+	g_string_printf(gstr, "%s: *(.+)$", field);
+	regex = g_regex_new(gstr->str, 0, 0, &error);
+	while (fgets(buffer, sizeof(buffer), fp)) {
+		GMatchInfo *info;
+		gchar *str;
+
+		g_regex_match(regex, buffer, 0, &info);
+		if (!g_match_info_matches(info))
+			continue;
+		str = g_strdup(g_match_info_fetch(info, 1));
+		*values = g_list_prepend(*values, str);
+	}
+	g_regex_unref(regex);
+	g_string_free(gstr, TRUE);
+}
+
+static enum order_status get_order_status(FILE *fp)
+{
+	assert(fp != NULL);
+	return order_executed;
+}
+#endif
 
 static int extract_data(const char *buffer, struct trade *trade,
 			const GRegex *regex)
@@ -139,7 +199,7 @@ static int extract_data(const char *buffer, struct trade *trade,
 		g_free(str);
 
 		ret = 0;
-	} else 
+	} else
 		ret = -1;
 	g_match_info_free(match_info);
 	return ret;
@@ -233,7 +293,7 @@ end:
 	if (last == market.newest)
 		return;
 	else if (market.newest == market.trades) {
-		market.trades = g_list_remove_link(market.trades, 
+		market.trades = g_list_remove_link(market.trades,
 						   market.newest);
 		last->next = market.newest;
 		market.newest->prev = last;
@@ -246,7 +306,7 @@ end:
 		log_data(market.newest->next);
 		market.earliest_updated = market.newest->next;
 		market.newest = last;
-		if (!indicators_initialized() && 
+		if (!indicators_initialized() &&
 		    market.trades_count < MIN_ANALYSIS_SIZE) {
 			return;
 		}
@@ -256,155 +316,32 @@ end:
 	}
 }
 
-#if !USE_FAKE_SOURCE
-static void set_cookie(const char *start, int size)
-{
-	int len, i, k, l;
-	GList *node = NULL;
-	GString *gstr;
-	for (i = 0; i < size && start[i] != '='; i++);
-	if (i == size) {
-		fprintf(stderr, "Invalid Cookie.\n");
-		return;
-	}
-	/* len: length up to the = sign (incl.) */
-	len = i + 1;
-	for (l = size - 1; start[l] == '\0' || start[l] == '\n' ||
-		     start[l] == '\r'; l--);
-	l++;
-	for (i = len; i < l && start[i] != ';'; i++);
-	k = i;
-
-	for (i = 0, node = cookies; node; node = node->next, i++) {
-		gstr = (GString *)node->data;
-		if (gstr->len <= len)
-			continue;
-		if (strncmp(start, gstr->str, len) == 0) {
-			g_string_overwrite_len(gstr, len, start + len, k - len);
-			return;
-		}
-	}
-	if (i == MAX_COOKIE_NUM) {
-		fprintf(stderr, "No space for more cookies.\n");
-		return;
-	}
-	gstr = g_string_new_len(start, k);
-	cookies = g_list_prepend(cookies, gstr);
-}
-
-static size_t write_header(void *buffer, size_t size, size_t nmemb, void *userp)
-{
-	const char *cookiestr = "Set-Cookie:";
-	char *chp;
-	char * start = (char *)buffer;
-	int len = strlen(cookiestr);
-	int cap = size * nmemb;
-
-	if (cap < len)
-		return cap;
-	if (strncmp((char *)buffer, cookiestr, len))
-		return cap;
-	for (chp = start + len; *chp == ' '; chp++);
-	set_cookie(chp, cap - (chp -(char *)buffer));
-	return cap;
-}
-
-static size_t write_data(void *buffer, size_t size, size_t nmemb, void *userp)
-{
-	int cap = size * nmemb;
-	switch (g_atomic_int_get(&my_status)) {
-	case registering:
-		break;
-	case collecting: {
-		FILE *fp = (FILE *)userp;
-		fwrite(buffer, cap, 1, fp);
-		break;
-	}
-	default:
-		break;
-	}
-	return cap;
-}
-#endif
-
-static int login(CURL *handle)
+static int login(void)
 {
 	int ret = 0;
 #if !USE_FAKE_SOURCE
 	int code;
-	int i;
-	char *headerlines[] = {
-		"Host: www.avanza.se",
-		"Connection: keep-alive",
-		"Referer: https://www.avanza.se/aza/home/home.jsp",
-		"Content-Length: 37",
-		"Cache-Control: max-age=0",
-		"Origin: https://www.avanza.se",
-		"User-Agent: Mozilla/5.0 (Windows NT 5.1) "
-		"Content-Type: application/x-www-form-urlencoded",
-		"Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-		"Accept-Encoding: gzip,deflate",
-		"Accept-Language: en-us,en;q=0.5",
-		"Accept-Charset: ISO-8859-1,utf-8;q=0.7,*;q=0.7",
-	};
-	struct curl_slist *headers = NULL;
 	const char *loginfo = "username=sinbaski&password=2Oceans%3F";
 	const char *url ="https://www.avanza.se/aza/login/login.jsp";
-
-	for (i = 0; i < sizeof(headerlines)/sizeof(char *); i++) {
-		headers = curl_slist_append(headers, headerlines[i]);		
-	}
-	if ((code = curl_easy_setopt(handle, CURLOPT_ERRORBUFFER,
-				     conn.errbuf))) {
-		fprintf(stderr, "Failed to set CURLOPT_ERRORBUFFER. Error %d.\n", code);
-		ret = code;
-		goto end;
-	}
-	if ((code = curl_easy_setopt(handle, CURLOPT_HTTPHEADER, headers))) {
-		fprintf(stderr, "Failed to set CURLOPT_HTTPHEADER. Error %d.\n", code);
-		ret = code;
-		goto end;
-	}
-	if ((code = curl_easy_setopt(handle, CURLOPT_HEADERFUNCTION,
-				     write_header))) {
-		fprintf(stderr, "curl_easy_setopt failed with "
-			"CURLOPT_WRITEDATA. Error %d.\n",
-			code);
-		goto end;
-	}
-	if ((code = curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION,
-				     write_data))) {
-		fprintf(stderr, "curl_easy_setopt failed with "
-			"CURLOPT_WRITEFUNCTION. Error %d.\n",
-			code);
-		goto end;
-	}
-	if ((code = curl_easy_setopt(handle, CURLOPT_POSTFIELDS, loginfo))) {
-		fprintf(stderr, "Failed to set CURLOPT_POSTFIELDS. Error %d.\n", code);
-		ret = code;
-		goto end;
-	}
-	if ((code = curl_easy_setopt(handle, CURLOPT_POSTFIELDSIZE, strlen(loginfo)))) {
-		fprintf(stderr, "Failed to set CURLOPT_POSTFIELDSIZE. Error %d.\n", code);
-		ret = code;
-		goto end;
-	}
-	if ((code = curl_easy_setopt(handle, CURLOPT_URL, url))) {
-		fprintf(stderr, "Failed to set CURLOPT_URL. Error %d.\n", code);
-		ret = code;
-		goto end;
-	}
+	FILE *fp;
+	refresh_conn();
+	curl_easy_setopt(conn.handle, CURLOPT_POSTFIELDS, loginfo);
+	curl_easy_setopt(conn.handle, CURLOPT_POSTFIELDSIZE, strlen(loginfo));
+	curl_easy_setopt(conn.handle, CURLOPT_URL, url);
 	g_atomic_int_set(&my_status, registering);
-	if ((code = curl_easy_perform(handle))) {
+
+	fp = fopen("./login.txt", "w");
+	curl_easy_setopt(conn.handle, CURLOPT_HEADERDATA, fp);
+	if ((code = curl_easy_perform(conn.handle))) {
 		fprintf(stderr, "[%s] %s: curl_easy_perform() failed. "
 			"Error %d: %s\n", get_timestring(), __func__,
 			code, conn.errbuf);
-		sleep(100 + rand() % 140); 
+		sleep(100 + rand() % 140);
 		ret = code;
 		goto end;
 	}
+	fclose(fp);
 end:
-	curl_slist_free_all(headers);
 	fflush(stderr);
 #else
 	g_atomic_int_set(&my_status, registering);	
@@ -413,107 +350,13 @@ end:
 
 }
 
-static char *join_cookies(void)
-{
-	GList *node;
-	int sum;
-	char *buffer, *p;
-	const char *cookiestr = "Cookie: ";
-
-	for (sum = strlen(cookiestr), node = cookies; node;
-	     node = node->next) {
-		/* 2 for "; " */
-		sum += ((GString *)node->data)->len + 2;
-	}
-	/* -2 for the last "; ", which is Not needed; 1 for the ending NULL */
-	sum = sum - 2 + 1;
-	buffer = malloc(sum);
-	memset(buffer, 0, sum);
-	if (!buffer) {
-		fprintf(stderr, "%s: No memory.\n", __func__);
-		return NULL;
-	}
-	strcpy(buffer, cookiestr);
-	for (p = buffer + strlen(cookiestr), node = cookies; node;
-	     node = node->next) {
-		GString *gstr = (GString *)node->data;
-		strncpy(p, gstr->str, gstr->len);
-		p += gstr->len;
-		if (node->next) {
-			strcpy(p, "; ");
-			p += 2;
-		}
-	}
-	return buffer;
-}
-
-static int prepare_http_headers(CURL *handle, struct curl_slist **headers)
-{
-	int i;
-	int code, ret = 0;
-	char temp[1024];
-	char *cookie = NULL;
-	char *headerlines[] = {
-		"Host: www.avanza.se",
-
-		"Accept: application/x-ms-application, image/jpeg, "
-		"application/xaml+xml, image/gif, image/pjpeg, "
-		"application/x-ms-xbap, application/vnd.ms-excel, "
-		"application/vnd.ms-powerpoint, "
-		"application/msword, application/x-shockwave-flash, */*",
-
-		"Accept-Language: sv-SE",
-		"Accept-Encoding: gzip, deflate",
-
-		"User-Agent: Mozilla/5.0 (Windows NT 6.1; WOW64; rv:7.0) "
-		"Gecko/20100101 Firefox/7.0",
-
-		"Connection: Keep-Alive",
-		"Cache-Control: no-cache",
-		temp
-	};
-	sprintf(temp, "Referer: https://www.avanza.se"
-		"/aza/aktieroptioner/kurslistor/aktie.jsp"
-		"?orderbookId=%s&grtype=intraday&sort=byID",
-		orderbookId);
-	for (i = 0; i < sizeof(headerlines)/sizeof(char *); i++) {
-		*headers = curl_slist_append(*headers, headerlines[i]);		
-	}
-	cookie = join_cookies();
-	*headers = curl_slist_append(*headers, cookie);
-	free(cookie);
-	if ((code = curl_easy_setopt(handle, CURLOPT_HTTPHEADER, *headers))) {
-		fprintf(stderr, "Failed to set CURLOPT_HTTPHEADER. "
-			"Error %d.\n", code);
-		ret = code;
-		goto end;
-	}
-	sprintf(temp,
-		"https://www.avanza.se/aza/aktieroptioner/"
-		"kurslistor/avslut.jsp?"
-		"password=2Oceans?&orderbookId=%s&username=sinbaski",
-		orderbookId);
-	if ((code = curl_easy_setopt(handle, CURLOPT_URL, temp))) {
-		fprintf(stderr, "Failed to set CURLOPT_HTTPHEADER. "
-			"Error %d.\n", code);
-		ret = code;
-		goto end;
-	}
-end:
-	fflush(stderr);
-	return ret;
-}
-
-static void prepare_connection(struct curl_slist **headers)
+static void prepare_connection(void)
 {
 	CURLcode code;
 	if (conn.handle) {
 		curl_easy_cleanup(conn.handle);
 		curl_global_cleanup();
 		conn.handle = NULL;
-	}
-	if (cookies) {
-		g_list_free_full(cookies, free_cookie);
 	}
 	while (!conn.handle) {
 		if ((code = curl_global_init(CURL_GLOBAL_ALL))) {
@@ -525,20 +368,12 @@ static void prepare_connection(struct curl_slist **headers)
 			fprintf(stderr, "curl_easy_init() failed.\n");
 			goto end1;
 		}
-		if ((code = login(conn.handle))) {
+		/* "" enables the libcurl cookie engine */
+		curl_easy_setopt(conn.handle, CURLOPT_COOKIEFILE, "");
+		if ((code = login())) {
 			goto end2;
 		}
-		if ((code = prepare_http_headers(conn.handle, headers))) {
-			goto end2;
-		}
-		if ((code = curl_easy_setopt(conn.handle, CURLOPT_ERRORBUFFER,
-					     conn.errbuf))) {
-			goto end2;
-		}
-		if ((code = curl_easy_setopt(conn.handle, CURLOPT_TIMEOUT,
-					     TRANSFER_TIMEOUT))) {
-			goto end2;
-		}
+		refresh_conn();
 		break;
 
 	end2:
@@ -557,7 +392,7 @@ static void collect_data(void)
 {
 	GRegex *regex;
 	GError *error = NULL;
-	struct curl_slist *headers = NULL;
+	GString *str = g_string_sized_new(128);
 	int i;
 	regex = g_regex_new("^<TR.*><TD.*>[^<]*</TD>"
 			    "<TD.*>[^<]*</TD>"
@@ -566,22 +401,27 @@ static void collect_data(void)
 			    "<TD.*>([0-9]+,[0-9]{2})</TD>"
 			    "<TD.*>([0-9]+)</TD></TR>$",
 			    0, 0, &error);
+	g_string_printf(str, "https://www.avanza.se/aza/"
+			"aktieroptioner/kurslistor/"
+			"avslut.jsp?password=2Oceans?"
+			"&orderbookId=%s&username=sinbaski",
+			orderbookId);
 
-	prepare_connection(&headers);
+	prepare_connection();
 	for (i = 0; g_atomic_int_get(&my_status) == collecting; i = 1) {
 		struct stat st;
 		FILE *fp;
 #if !USE_FAKE_SOURCE
 		CURLcode code;
+		time_t t1, t2;
+
 		fp = fopen("./intraday.html", "w");
+		time(&t1);
 		if (i == 0)
 			memset(&market, 0, sizeof(market));
-		if ((code = curl_easy_setopt(conn.handle, CURLOPT_WRITEDATA, fp))) {
-			fprintf(stderr, "curl_easy_setopt failed with CURLOPT_WRITEDATA. Error %d.\n",
-				code);
-			fclose(fp);
-			continue;
-		}
+		refresh_conn();
+		curl_easy_setopt(conn.handle, CURLOPT_WRITEDATA, fp);
+		curl_easy_setopt(conn.handle, CURLOPT_URL, str->str);
 		if ((code = curl_easy_perform(conn.handle))) {
 			char *timestring;
 			timestring = get_timestring();
@@ -590,7 +430,7 @@ static void collect_data(void)
 				code, conn.errbuf);
 			fflush(stderr);
 			sleep(100 + rand() % 140);
-			prepare_connection(&headers);
+			prepare_connection();
 			fclose(fp);
 			continue;
 		}
@@ -621,17 +461,113 @@ static void collect_data(void)
 		}
 		fflush(stderr);
 #if !USE_FAKE_SOURCE
-		sleep(DATA_UPDATE_INTERVAL);
+		time(&t2);
+		if (t2 - t1 < DATA_UPDATE_INTERVAL)
+			sleep(DATA_UPDATE_INTERVAL - (t2 - t1));
 #endif
 	}
 	curl_easy_cleanup(conn.handle);
 	curl_global_cleanup();
-	curl_slist_free_all(headers);
 	g_list_free_full(market.trades, free_trade);
-	g_list_free_full(cookies, free_cookie);
 	g_regex_unref(regex);
-	fclose(stdout);
-	fclose(stderr);
+	g_free(str);
+}
+
+int send_order(enum action_type action)
+{
+	const struct stock_info *info = get_stock_info(orderbookId);
+	struct trade *trade = (struct trade *)market.newest->data;
+	double latest = trade->price;
+	GString *gstr;
+	int ret;
+#if REAL_TRADE
+
+	GList *list = NULL;
+	FILE *fp, *fp1;
+	enum order_status order_status = order_waiting;
+	CURLcode err;
+
+	assert(info != NULL);
+	refresh_conn();
+	fp = fopen("./OrderResponseHeader.txt", "w");
+	curl_easy_setopt(conn.handle, CURLOPT_HEADERDATA, fp);
+	gstr = g_string_sized_new(512);
+	g_string_printf(
+		gstr,
+		"advanced=true&account=7781011&orderbookId=%s&market=INET&"
+		"volume=%ld.0&price=%.1f&openVolume=0.0&validDate=%s&"
+		"condition=AM&orderType=%s&intendedOrderType=buy&"
+		"toggleClosings=false&toggleOrderDepth=false&"
+		"toggleAdvanced=false&"
+		"searchString=%s&transitionId=%s&commit=true&contractSize=1.0&"
+		"market=INET&currency=SEK&currencyRate=1.0&countryCode=SE&"
+		"orderType=sell&priceMultiplier=1.0&popped=false",
+		info->orderid, my_position.quantity, latest, get_datestring(),
+		action == action_buy ? "buy" : "sell", info->name,
+		action == action_buy ? "21" : "31"
+		);
+	curl_easy_setopt(conn.handle, CURLOPT_POSTFIELDS, gstr->str);
+	curl_easy_setopt(conn.handle, CURLOPT_POSTFIELDSIZE, gstr->len);
+	g_free(gstr);
+	curl_easy_setopt(
+		conn.handle, CURLOPT_URL,
+		"https://www.avanza.se/aza/order/aktie/kopsalj.jsp");
+	if ((err = curl_easy_perform(conn.handle))) {
+		fprintf(stderr, "[%s] %s: curl_easy_perform() failed. "
+			"Error %d: %s\n", get_timestring(), __func__,
+			err, conn.errbuf);
+		return err;
+	}
+	fclose(fp);
+	
+	/* confirm that the order has been executed */
+	fp = fopen("./OrderResponseHeader.txt", "r");
+	extract_header_field("Location", &list, fp);
+	fclose(fp);
+	if (!list) {
+		ret = -1;
+		goto end;
+	}
+	refresh_conn();
+	curl_easy_setopt(conn.handle, CURLOPT_URL, (char *)list->data);
+	while (order_status != order_executed &&
+	       order_status != order_killed) {
+		fp = fopen("./OrderResponse.html", "w");
+		fp1 = fopen("./OrderResponse.txt", "w");
+		curl_easy_setopt(conn.handle, CURLOPT_WRITEDATA, fp);
+		curl_easy_setopt(conn.handle, CURLOPT_HEADERDATA, fp1);
+		if ((err = curl_easy_perform(conn.handle))) {
+			fprintf(stderr, "[%s] %s: curl_easy_perform() failed. "
+				"Error %d: %s\n", get_timestring(), __func__,
+				err, conn.errbuf);
+			ret = err;
+			order_status = order_killed;
+			break;
+		}
+		order_status = get_order_status(fp);
+		fclose(fp1);
+		fclose(fp);
+		if (order_status != order_executed &&
+		    order_status != order_killed)
+			sleep(15);
+	}
+	ret = order_status == order_executed ? 0 : 1;
+end:
+	g_list_free_full(list, g_free);
+#else
+	ret = 0;
+#endif
+	gstr = g_string_sized_new(64);
+	g_string_printf(
+		gstr,
+		"Ladies and gentlemen, may I have your attention? "
+		"I %s to %s %s at %.1f kronor.",
+		ret == 0 ? "Succeeded" : "Failed",
+		action == action_buy ? "buy" : "sell",
+		info->name, latest);
+	declare(gstr->str);
+	g_free(gstr);
+	return ret;
 }
 
 static void signal_handler(int sig, siginfo_t * siginfo, void *context)
@@ -675,7 +611,7 @@ int main(int argc, const char *argv[])
 		return 0;
 	}
 	strcpy(orderbookId, argv[1]);
-#ifndef DEBUG
+#if DAEMONIZE
 	daemonize();
 #endif
 	freopen( "/dev/null", "r", stdin);

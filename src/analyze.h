@@ -83,11 +83,16 @@ struct trade_position {
 	time_t enter_time;
 };
 
-char orderbookId[20];
-
+extern struct trade_position my_position;
+extern struct market market;
+extern char orderbookId[20];
+int indicators_initialized(void);
+void save_indicators(void);
+void restore_indicators(void);
 time_t parse_time(const char *timestring);
 void set_position(const struct trade_position *position);
 void discard_old_records(int size);
 int trade_equal(const struct trade *t1, const struct trade *t2);
 void analyze();
+
 #endif

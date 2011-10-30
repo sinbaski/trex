@@ -41,6 +41,19 @@
 		str;						\
 	})
 
+#define get_datestring()					\
+	({							\
+		char str[9];					\
+		time_t now;					\
+		struct tm *timep;				\
+		memset(str, 0, sizeof(str));			\
+		time(&now);					\
+		timep = localtime(&now);			\
+		sprintf(str, "%4d-%02d-%02d", timep->tm_year + 1900,	\
+			timep->tm_mon + 1, timep->tm_mday);		\
+		str;						\
+	})
+
 #define make_timestring(x)				\
 	({							\
 		char ts_str[9];					\

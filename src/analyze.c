@@ -9,6 +9,8 @@
 #include <glib.h>
 #include "analyze.h"
 
+extern int send_order(enum action_type action);
+
 /* 2 hours */
 const double fee = 198;
 struct market market;
@@ -16,10 +18,6 @@ struct trade_position my_position;
 
 const char *action_strings[number_of_action_types] = {
 	"BUY", "SELL", "OBSERVE"
-};
-
-const char *trend_strings[number_of_trend_types] = {
-	"up", "down", "unclear"
 };
 
 struct indicators indicators = {
@@ -42,8 +40,8 @@ struct {
 	const float min_profit_open;
 	const float min_profit_close;
 } policy = {
-	.min_profit_open = 400,
-	.min_profit_close = 300
+	.min_profit_open = 350,
+	.min_profit_close = 250
 };
 
 int indicators_initialized(void)
@@ -82,14 +80,14 @@ void restore_indicators(void)
 /* 	int i; */
 /* 	double avg; */
 /* 	long total; */
-		
+
 /* 	for (i = 0, avg = 0, total = 0; i < size; i++) { */
 /* 		struct trade *trade = (struct trade *)p->data; */
 /* 		total += trade->quantity; */
 /* 		avg += (trade->price * trade->quantity)/total - */
 /* 			avg * trade->quantity / total; */
 /* 	} */
-	
+
 /* 	return avg; */
 /* } */
 
@@ -147,7 +145,7 @@ static double cal_der_sum(FILE *datafile, long n)
 	long i;
 	double sum;
 	struct trade trade;
-	
+
 	assert(fnum_of_line(datafile) >= n);
 	for (i = 1, sum = 0; i <= n; i++) {
 		double p1, p2;
@@ -166,14 +164,17 @@ static double cal_der_sum(FILE *datafile, long n)
 	return sum;
 }
 
-static void cal_indicator(FILE *datafile, time_t since,
-				struct timely_indicator *ind)
+static void cal_indicator(FILE *datafile, time_t since, int idx)
 {
 	struct trade trade;
 	const char *sincestr;
 	double x, y;
 	int i;
 	long tot;
+	double max_margin[] = {
+		0.008, 0.01, 0.012
+	};
+	struct timely_indicator *ind = indicators.timely + idx;
 
 	if (get_trade(datafile, 0, NULL) > since ||
 	    get_trade(datafile, fnum_of_line(datafile) - 1,
@@ -202,7 +203,7 @@ static void cal_indicator(FILE *datafile, time_t since,
 			break;
 	}
 	x = (ind->ind[2] - ind->ind[0]) * 0.5 * 0.8 / ind->ind[1];
-	x = MIN(x, 0.008);
+	x = MIN(x, max_margin[idx]);
 	if (my_position.status == complete) {
 		y = (policy.min_profit_open + fee) / my_position.quantity
 			/ ind->ind[1];
@@ -245,12 +246,9 @@ static void update_indicators()
 			indicators.timely[i].available = 0;
 		}
 	}
-	cal_indicator(datafile, now - 20 * 60,
-			    &indicators.timely[0]);
-	cal_indicator(datafile, now - 45 * 60,
-			    &indicators.timely[1]);
-	cal_indicator(datafile, now - 90 * 60,
-			    &indicators.timely[2]);
+	cal_indicator(datafile, now - 20 * 60, 0);
+	cal_indicator(datafile, now - 45 * 60, 1);
+	cal_indicator(datafile, now - 90 * 60, 2);
 	indicators.der = cal_der_sum(datafile, 40);
 #ifdef DEBUG
 	indicators.allow_new_positions = 1;
@@ -272,7 +270,7 @@ static double cal_profit(double price)
 		break;
 	case buy_and_sell:
 		diff = price - my_position.price;
-		break; 
+		break;
 	}
 	return diff * my_position.quantity - fee;
 }
@@ -289,10 +287,14 @@ static void execute(enum action_type action)
 			printf(" %s: Disallowed.\n", __func__);
 			break;
 		}
-		printf(" %s: %s.\n", __func__, action_strings[action]);
-		my_position.status = incomplete;
-		my_position.price = price;
-		my_position.enter_time = parse_time(trade->time);
+		if (send_order(action) == 0) {
+			my_position.status = incomplete;
+			my_position.price = price;
+			my_position.enter_time = parse_time(trade->time);
+			printf(" %s: %s.\n", __func__, action_strings[action]);
+		} else
+			printf(" %s: %s failed.\n", __func__,
+			       action_strings[action]);
 		break;
 	case 0b001: /*buy-and-sell, complete, sell */
 	case 0b010: /*buy-and-sell, incomplete, buy */
@@ -302,8 +304,13 @@ static void execute(enum action_type action)
 		break;
 	case 0b011: /*buy-and-sell, incomplete, sell */
 	case 0b110: /*sell-and-buy, incomplete, buy */
-		my_position.status = complete;
-		printf(" %s: %s.\n", __func__, action_strings[action]);
+		if (send_order(action) == 0) {
+			my_position.status = complete;
+			printf(" %s: %s.\n", __func__,
+			       action_strings[action]);
+		} else
+			printf(" %s: %s failed.\n", __func__,
+			       action_strings[action]);
 	}
 }
 
@@ -321,7 +328,7 @@ static enum action_type price_comparer(double latest, int index)
 	enum action_type action = action_observe;
 	struct timely_indicator *ind = indicators.timely + index;
 	double lim, profit;
-	
+
 	if (!ind->available)
 		return action_observe;
 	switch (my_position.mode << 1 | my_position.status) {
