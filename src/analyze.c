@@ -171,9 +171,9 @@ static void cal_indicator(FILE *datafile, time_t since, int idx)
 	double x, y;
 	int i;
 	long tot;
-	double max_margin[] = {
-		0.008, 0.01, 0.012
-	};
+	/* double max_margin[] = { */
+	/* 	0.008, 0.01, 0.012 */
+	/* }; */
 	struct timely_indicator *ind = indicators.timely + idx;
 
 	if (get_trade(datafile, 0, NULL) > since ||
@@ -202,13 +202,14 @@ static void cal_indicator(FILE *datafile, time_t since, int idx)
 		if (ftell(datafile) == 0)
 			break;
 	}
-	x = (ind->ind[2] - ind->ind[0]) * 0.5 * 0.8 / ind->ind[1];
-	x = MIN(x, max_margin[idx]);
+	/* x = MIN(x, max_margin[idx]); */
 	if (my_position.status == complete) {
+		x = (ind->ind[2] - ind->ind[0]) * 0.5 * 0.8 / ind->ind[1];
 		y = (policy.min_profit_open + fee) / my_position.quantity
 			/ ind->ind[1];
 		ind->margin = MAX(x, y);
 	} else {
+		x = (ind->ind[2] - ind->ind[0]) * 0.5 * 0.6 / ind->ind[1];
 		ind->margin = x;
 	}
 	ind->available = 1;
