@@ -51,7 +51,8 @@ struct timely_indicator {
 
 struct indicators {
 	long volume;
-	double der;
+	double ret;
+	double avg_ret;
 	double tolerated_loss;
 	unsigned int allow_new_positions:1;
 	struct timely_indicator timely[3];

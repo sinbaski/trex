@@ -33,7 +33,9 @@ struct indicators indicators = {
 			.margin = 1.2 / 80,
 		},
 	},
-	.tolerated_loss = 250
+	.tolerated_loss = 250,
+	.allow_new_positions = 1,
+	.avg_ret = 0
 };
 
 struct {
@@ -140,28 +142,38 @@ static int is_trapped(void)
 	return trapped;
 }
 
-static double cal_der_sum(FILE *datafile, long n)
+static double cal_ret(FILE *datafile, long n1, long n2)
+{
+	long l = ftell(datafile);
+	struct trade trade1, trade2;
+
+	assert(n1 >= 0 && n1 < n2 && fnum_of_line(datafile) >= n2);
+	fseek(datafile, -(n1 + 1) * DATA_ROW_WIDTH, SEEK_END);
+	fscanf(datafile, "%s\t%s\t%lf\t%ld",
+	       trade1.market, trade1.time, &trade1.price,
+	       &trade1.quantity);
+	fseek(datafile, -n2 * DATA_ROW_WIDTH, SEEK_END);
+	fscanf(datafile, "%s\t%s\t%lf\t%ld",
+	       trade2.market, trade2.time, &trade2.price,
+	       &trade2.quantity);
+	fseek(datafile, l, SEEK_SET);
+	return (trade1.price - trade2.price)/trade2.price;
+}
+
+/*
+  \sum_{i=1}^{n} r_i
+  where r_i = (p_{i, m} - p_{i, 1})/p_{i, 1}
+*/
+static double cal_avg_ret(FILE *datafile, long n, long m)
 {
 	long i;
 	double sum;
-	struct trade trade;
 
-	assert(fnum_of_line(datafile) >= n);
-	for (i = 1, sum = 0; i <= n; i++) {
-		double p1, p2;
-		fseek(datafile, -i * DATA_ROW_WIDTH, SEEK_END);
-		fscanf(datafile, "%s\t%s\t%lf\t%ld",
-		       trade.market, trade.time, &trade.price,
-		       &trade.quantity);
-		if (i == 1)
-			p2 = trade.price;
-		else {
-			p1 = trade.price;
-			sum += (p2 - p1)/p1;
-			p2 = p1;
-		}
+	assert(n > 0 && m > 0 && fnum_of_line(datafile) >= n * m - (n - 1));
+	for (i = 0, sum = 0; i < n; i++) {
+		sum += cal_ret(datafile, i * (m - 1), (i + 1) * m - i);
 	}
-	return sum;
+	return sum / n;
 }
 
 static void cal_indicator(FILE *datafile, time_t since, int idx)
@@ -219,7 +231,8 @@ static void dump_indicators(void)
 {
 	int i;
 	struct trade *trade = (struct trade *)market.newest->data;
-	printf("[%s]: %f %lf", trade->time, trade->price, indicators.der);
+	printf("[%s]: %f %lf %lf", trade->time, trade->price,
+	       indicators.ret, indicators.avg_ret);
 	for (i = 0; i < ARRAY_SIZE(indicators.timely); i++) {
 		printf(" {%lf %f}.", indicators.timely[i].ind[1],
 		       indicators.timely[i].margin);
@@ -231,6 +244,9 @@ static void update_indicators()
 	time_t now;
 	FILE *datafile = fopen(get_filename("records", ".dat"), "r");
 	int i;
+	const long grp_size = 40;
+	const long grp_num = 10;
+
 	if (!datafile) {
 		fprintf(stderr, "%s: Failed to open datafile. Error %d.\n",
 			__func__, errno);
@@ -250,11 +266,16 @@ static void update_indicators()
 	cal_indicator(datafile, now - 20 * 60, 0);
 	cal_indicator(datafile, now - 45 * 60, 1);
 	cal_indicator(datafile, now - 90 * 60, 2);
-	indicators.der = cal_der_sum(datafile, 40);
-#ifdef DEBUG
-	indicators.allow_new_positions = 1;
+
+	indicators.ret = cal_ret(datafile, 0, grp_size);
+	if (fnum_of_line(datafile) >= grp_num * grp_size - (grp_num - 1))
+		indicators.avg_ret = cal_avg_ret(datafile, grp_num, grp_size);
+	
+#if CURFEW_AFT_5
+	indicators.allow_new_positions =
+		strcmp(get_timestring(), "17:00:00") < 0;
 #else
-	indicators.allow_new_positions = strcmp(get_timestring(), "17:00:00") < 0;
+	indicators.allow_new_positions = 1;
 #endif
 	fclose(datafile);
 
@@ -329,24 +350,25 @@ static enum action_type price_comparer(double latest, int index)
 	enum action_type action = action_observe;
 	struct timely_indicator *ind = indicators.timely + index;
 	double lim, profit;
+	double ret = 0.6 * indicators.ret + 0.4 * indicators.avg_ret;
 
 	if (!ind->available)
 		return action_observe;
 	switch (my_position.mode << 1 | my_position.status) {
 	case 0b00:
 		lim = ind->ind[1] * (1 - ind->margin);
-		if (latest <= lim && indicators.der >= 0.0008)
+		if (latest <= lim && ret >= 0.0005)
 			action = action_buy;
 		break;
 	case 0b10:
 		lim = ind->ind[1] * (1 + ind->margin);
-		if (latest >= lim && indicators.der <= -0.0008)
+		if (latest >= lim && ret <= -0.0005)
 			action = action_sell;
 		break;
 	case 0b01:
 		lim = ind->ind[1] * (1 + ind->margin);
 		profit = cal_profit(latest);
-		if (indicators.der > 0.0008)
+		if (ret > 0.0005)
 			action = action_observe;
 		else if (latest > lim)
 			action = action_sell;
@@ -356,7 +378,7 @@ static enum action_type price_comparer(double latest, int index)
 	case 0b11:
 		lim = ind->ind[1] * (1 - ind->margin);
 		profit = cal_profit(latest);
-		if (indicators.der < -0.0008)
+		if (ret < -0.0005)
 			action = action_observe;
 		else if (latest < lim)
 			action = action_buy;

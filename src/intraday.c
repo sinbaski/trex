@@ -1,4 +1,4 @@
- #include <stdio.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <assert.h>
@@ -93,7 +93,7 @@ static void daemonize(void)
 
 static void declare(const char *str)
 {
-	FILE *fp = fopen("./declare", "w");
+	FILE *fp = fopen("./beep", "a");
 	fprintf(fp, "%s\n", str);
 	fclose(fp);
 
@@ -392,7 +392,7 @@ static void collect_data(void)
 {
 	GRegex *regex;
 	GError *error = NULL;
-	GString *str = g_string_sized_new(128);
+	GString *gstr = g_string_sized_new(128);
 	int i;
 	regex = g_regex_new("^<TR.*><TD.*>[^<]*</TD>"
 			    "<TD.*>[^<]*</TD>"
@@ -401,7 +401,7 @@ static void collect_data(void)
 			    "<TD.*>([0-9]+,[0-9]{2})</TD>"
 			    "<TD.*>([0-9]+)</TD></TR>$",
 			    0, 0, &error);
-	g_string_printf(str, "https://www.avanza.se/aza/"
+	g_string_printf(gstr, "https://www.avanza.se/aza/"
 			"aktieroptioner/kurslistor/"
 			"avslut.jsp?password=2Oceans?"
 			"&orderbookId=%s&username=sinbaski",
@@ -414,14 +414,17 @@ static void collect_data(void)
 #if !USE_FAKE_SOURCE
 		CURLcode code;
 		time_t t1, t2;
+#endif
 
 		fp = fopen("./intraday.html", "w");
-		time(&t1);
 		if (i == 0)
 			memset(&market, 0, sizeof(market));
+
+#if !USE_FAKE_SOURCE
+		time(&t1);
 		refresh_conn();
 		curl_easy_setopt(conn.handle, CURLOPT_WRITEDATA, fp);
-		curl_easy_setopt(conn.handle, CURLOPT_URL, str->str);
+		curl_easy_setopt(conn.handle, CURLOPT_URL, gstr->str);
 		if ((code = curl_easy_perform(conn.handle))) {
 			char *timestring;
 			timestring = get_timestring();
@@ -470,7 +473,7 @@ static void collect_data(void)
 	curl_global_cleanup();
 	g_list_free_full(market.trades, free_trade);
 	g_regex_unref(regex);
-	g_free(str);
+	g_string_free(gstr, TRUE);
 }
 
 int send_order(enum action_type action)
@@ -508,7 +511,7 @@ int send_order(enum action_type action)
 		);
 	curl_easy_setopt(conn.handle, CURLOPT_POSTFIELDS, gstr->str);
 	curl_easy_setopt(conn.handle, CURLOPT_POSTFIELDSIZE, gstr->len);
-	g_free(gstr);
+	g_string_free(gstr, TRUE);
 	curl_easy_setopt(
 		conn.handle, CURLOPT_URL,
 		"https://www.avanza.se/aza/order/aktie/kopsalj.jsp");
@@ -557,16 +560,16 @@ end:
 #else
 	ret = 0;
 #endif
-	gstr = g_string_sized_new(64);
+	gstr = g_string_sized_new(128);
 	g_string_printf(
 		gstr,
 		"Ladies and gentlemen, may I have your attention? "
-		"I %s to %s %s at %.1f kronor.",
+		"I %s to %s %s at %.1f kronor.\n",
 		ret == 0 ? "Succeeded" : "Failed",
 		action == action_buy ? "buy" : "sell",
 		info->name, latest);
 	declare(gstr->str);
-	g_free(gstr);
+	g_string_free(gstr, TRUE);
 	return ret;
 }
 

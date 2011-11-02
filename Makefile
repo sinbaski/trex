@@ -6,6 +6,7 @@ objdir := obj
 USE_FAKE_SOURCE := 0
 DAEMONIZE := 1
 REAL_TRADE := 0
+CURFEW_AFT_5 = 1
 
 srcs := $(wildcard $(srcdir)/*.c)
 objs := $(notdir $(patsubst %.c, %.o, $(srcs)))
@@ -15,7 +16,8 @@ CFLAGS := -c -Wall -Werror -Iinclude -g3 $(debug) \
 $(shell pkg-config --cflags glib-2.0) \
 -DUSE_FAKE_SOURCE=$(USE_FAKE_SOURCE) \
 -DDAEMONIZE=$(DAEMONIZE) \
--DREAL_TRADE=$(REAL_TRADE)
+-DREAL_TRADE=$(REAL_TRADE) \
+-DCURFEW_AFT_5=$(CURFEW_AFT_5)
 
 LDFLAGS := -lcurl -Wl,-Bsymbolic-functions $(shell pkg-config --libs glib-2.0)
 
