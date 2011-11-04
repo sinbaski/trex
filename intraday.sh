@@ -12,7 +12,7 @@ status=0
 
 # entering price
 # ignored when status = 0
-price=85.40
+price=99.7
 
 # time when the current incomplete position
 # is entered.
@@ -61,6 +61,7 @@ start)
 	    echo "$0 already up and running"
 	    exit 0
 	fi
+	./alarm.sh &
 	start_trading
 	;;
 stop)
