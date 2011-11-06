@@ -264,8 +264,8 @@ static void update_indicators()
 		}
 	}
 	cal_indicator(datafile, now - 20 * 60, 0);
-	cal_indicator(datafile, now - 45 * 60, 1);
-	cal_indicator(datafile, now - 90 * 60, 2);
+	cal_indicator(datafile, now - 40 * 60, 1);
+	cal_indicator(datafile, now - 60 * 60, 2);
 
 	indicators.ret = cal_ret(datafile, 0, grp_size);
 	if (fnum_of_line(datafile) >= grp_num * grp_size - (grp_num - 1))

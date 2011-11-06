@@ -30,17 +30,17 @@ struct market {
 	long trades_count;
 };
 
-enum trend {
-	trend_up = 0,
-	trend_down,
-	trend_unclear,
-	number_of_trend_types
-};
+/* enum trend { */
+/* 	trend_up = 0, */
+/* 	trend_down, */
+/* 	trend_unclear, */
+/* 	number_of_trend_types */
+/* }; */
 
-struct trend_indicator {
-	enum trend trend;
-	int grp_size;
-};
+/* struct trend_indicator { */
+/* 	enum trend trend; */
+/* 	int grp_size; */
+/* }; */
 
 struct timely_indicator {
 	/* lowest average highest */
@@ -79,7 +79,10 @@ struct trade_position {
 	enum trade_mode mode;
 	enum trade_status status;
 	double price;
+	/* The number of shares we trade */
 	long quantity;
+	/* The number of shares that we have on the account */
+	long hld_qtt;
 	/* The time at which the position is entered */
 	time_t enter_time;
 };
