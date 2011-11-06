@@ -138,7 +138,7 @@ static void log_data(const GList *node)
 	fclose(datafile);
 }
 
-#if REAL_TRADE
+#if 0
 static void write_out_cookies(void)
 {
 	FILE *fp = fopen("cookie_dump.txt", "w");
@@ -159,9 +159,14 @@ static void refresh_conn(void)
 	curl_easy_reset(conn.handle);
 	curl_easy_setopt(conn.handle, CURLOPT_ERRORBUFFER, conn.errbuf);
 	curl_easy_setopt(conn.handle, CURLOPT_TIMEOUT, TRANSFER_TIMEOUT);
+	curl_easy_setopt(conn.handle, CURLOPT_USERAGENT,
+			 "Mozilla/5.0 (compatible; MSIE 9.0; "
+			 "Windows NT 6.1; WOW64; Trident/5.0)");
+	if (g_atomic_int_get(&my_status) != registering)
+		curl_easy_setopt(conn.handle, CURLOPT_COOKIEFILE, COOKIE_FILE);
 }
 
-#if REAL_TRADE
+#if 0
 static void extract_header_field(const char *field, GList **values, FILE *fp)
 {
 	GRegex *regex;
@@ -392,18 +397,13 @@ static void prepare_connection(void)
 	}
 	while (!conn.handle) {
 		conn.handle = curl_easy_init();
-		curl_easy_setopt(conn.handle, CURLOPT_USERAGENT,
-				 "Mozilla/5.0 (compatible; MSIE 9.0; "
-				 "Windows NT 6.1; WOW64; Trident/5.0)");
 		conn.valid = 1;
 		if (login()) {
 			goto end;
 		}
 		/* Cookie settings are not reset */
-		curl_easy_setopt(conn.handle, CURLOPT_COOKIEFILE, COOKIE_FILE);
 		/* curl_easy_setopt(conn.handle, CURLOPT_COOKIEFILE, ""); */
 		g_atomic_int_set(&my_status, collecting);
-		refresh_conn();
 		break;
 
 	end:
@@ -432,6 +432,53 @@ static CURLcode perform_request(void)
 	return code != 0 ? code : -EPIPE;
 }
 
+/* We must have logged in in order to do this */
+static long get_hld_qtt(void)
+{
+	FILE *fp = fopen("depa.html", "w");
+	const char *url = "https://www.avanza.se/aza/depa/depa.jsp"
+		"?depotnr=7781011";
+	GRegex *regex;
+	GError *error = NULL;
+	char buffer[1024];
+	const struct stock_info *info = get_stock_info(orderbookId);
+	GMatchInfo *match_info;
+	/* If no match is found, we have 0 shares. */
+	long n = 0;
+
+	refresh_conn();
+	curl_easy_setopt(conn.handle, CURLOPT_URL, url);
+	curl_easy_setopt(conn.handle, CURLOPT_REFERER,
+			 "https://www.avanza.se/aza/depa/"
+			 "sammanfattning/sammanfattning.jsp");
+	curl_easy_setopt(conn.handle, CURLOPT_FOLLOWLOCATION, 1);
+	curl_easy_setopt(conn.handle, CURLOPT_AUTOREFERER, 1);
+	curl_easy_setopt(conn.handle, CURLOPT_WRITEDATA, fp);
+	if (perform_request()) {
+		fclose(fp);
+		return -1;
+	}
+	fclose(fp);
+
+	fp = fopen("depa.html", "r");
+	sprintf(buffer, "%s</a></td><td  valign=\"bottom\" "
+		"class=\"neutral\"><nobr>([0-9]+)</nobr></td>",
+		info->name);
+	regex = g_regex_new(buffer, 0, 0, &error);
+	while (fgets(buffer, sizeof(buffer), fp)) {
+		gchar *str;
+		g_regex_match(regex, buffer, 0, &match_info);
+		if (!g_match_info_matches(match_info))
+			continue;
+		str = g_match_info_fetch(match_info, 1);
+		sscanf(str, "%ld", &n);
+		break;
+	}
+	fclose(fp);
+	g_regex_unref(regex);
+	return n;
+}
+
 static void collect_data(void)
 {
 	GRegex *regex;
@@ -452,6 +499,7 @@ static void collect_data(void)
 	/* 		orderbookId); */
 
 	prepare_connection();
+	my_position.hld_qtt = get_hld_qtt();
 	for (i = 0; g_atomic_int_get(&my_status) == collecting; i = 1) {
 		struct stat st;
 		FILE *fp;
@@ -542,99 +590,64 @@ int send_order(enum action_type action)
 	CURLcode err;
 	const char *orderurl = "https://www.avanza.se/aza"
 		"/order/aktie/kopsalj.jsp";
-	int i;
-	/* char *str; */
+	long hld_qtt;
 
 	assert(info != NULL);
-	for (i = 0; i < 2; i++) {
-		refresh_conn();
-		fp = fopen("./OrderResponse.html", "w");
-		fp1 = fopen("./OrderResponse.txt", "w");
-		curl_easy_setopt(conn.handle, CURLOPT_HEADERDATA, fp1);
-		curl_easy_setopt(conn.handle, CURLOPT_WRITEDATA, fp);
-		memset(buffer, 0, sizeof(buffer));
-		if (i == 0) {
-			/* sprintf(buffer, */
-			/* 	"advanced=true&account=7781011&countryCode=SE" */
-			/* 	"&searchString=%s&orderbookId=%s&" */
-			/* 	"market=INET&volume=%ld&price=%.1f&" */
-			/* 	"openVolume=&conditionSelector=AM&" */
-			/* 	"condition=AM&intendedOrderType=&" */
-			/* 	"toggleClosings=false&toggleOrderDepth=false&" */
-			/* 	"toggleAdvanced=false&transitionId=%d&" */
-			/* 	"jspTemplate=states%%2Fs.jsp&" */
-			/* 	"priceMultiplier=1.0&marketCode=INET&" */
-			/* 	"currency=SEK&currencyRate=1.0&" */
-			/* 	"contractSize=1.0&preFill=false&popped=false", */
-			/* 	info->name, info->orderid, my_position.quantity, */
-			/* 	latest, action == action_buy ? 12 : 13); */
-			sprintf(buffer, "fuck=you");
-		} else {
-			sprintf(buffer,
-				"advanced=true&account=7781011&orderbookId=%s&market=INET&"
-				"volume=%ld.0&price=%.1f&openVolume=0.0&validDate=%s&"
-				"condition=AM&orderType=%s&intendedOrderType=%s&"
-				"toggleClosings=false&toggleOrderDepth=false&"
-				"toggleAdvanced=false&"
-				"searchString=%s&transitionId=%s&commit=true&contractSize=1.0&"
-				"market=INET&currency=SEK&currencyRate=1.0&countryCode=SE&"
-				"orderType=%s&priceMultiplier=1.0&popped=false\n",
-				info->orderid, my_position.quantity, latest, get_datestring(),
-				action == action_buy ? "buy" : "sell",
-				action == action_buy ? "buy" : "sell",
-				info->name,
-				action == action_buy ? "21" : "31",
-				action == action_buy ? "buy" : "sell"
-				);
-		}
-		/* str = curl_easy_escape(conn.handle, buffer, strlen(buffer)); */
-		/* curl_easy_setopt(conn.handle, CURLOPT_POSTFIELDSIZE, strlen(buffer)); */
-		curl_easy_setopt(conn.handle, CURLOPT_COPYPOSTFIELDS, buffer);
-		/* curl_free(str); */
-		curl_easy_setopt(conn.handle, CURLOPT_REFERER, orderurl);
-		curl_easy_setopt(conn.handle, CURLOPT_URL, orderurl);
-		write_out_cookies();
-		if ((err = perform_request())) {
-			fclose(fp1);
-			fclose(fp);
-			return err;
-		}
-		fclose(fp);
-		fclose(fp1);
-	}
-
-	
-	/* confirm that the order has been executed */
-	fp = fopen("./OrderResponse.txt", "r");
-	extract_header_field("Location", &list, fp);
-	fclose(fp);
-	if (!list) {
-		ret = -1;
-		goto end;
-	}
 	refresh_conn();
-	curl_easy_setopt(conn.handle, CURLOPT_URL, (char *)list->data);
+	fp = fopen("./OrderResponse.html", "w");
+	fp1 = fopen("./OrderResponse.txt", "w");
+	curl_easy_setopt(conn.handle, CURLOPT_HEADERDATA, fp1);
+	curl_easy_setopt(conn.handle, CURLOPT_WRITEDATA, fp);
+	memset(buffer, 0, sizeof(buffer));
+	sprintf(buffer,
+		"advanced=true&account=7781011&orderbookId=%s&market=INET&"
+		"volume=%ld.0&price=%.1f&openVolume=0.0&validDate=%s&"
+		"condition=AM&orderType=%s&intendedOrderType=%s&"
+		"toggleClosings=false&toggleOrderDepth=false&"
+		"toggleAdvanced=false&"
+		"searchString=%s&transitionId=%s&commit=true&contractSize=1.0&"
+		"market=INET&currency=SEK&currencyRate=1.0&countryCode=SE&"
+		"orderType=%s&priceMultiplier=1.0&popped=false\n",
+		info->orderid, my_position.quantity, latest, get_datestring(),
+		action == action_buy ? "buy" : "sell",
+		action == action_buy ? "buy" : "sell",
+		info->name,
+		action == action_buy ? "21" : "31",
+		action == action_buy ? "buy" : "sell"
+		);
+	/* str = curl_easy_escape(conn.handle, buffer, strlen(buffer)); */
+	/* curl_easy_setopt(conn.handle, CURLOPT_POSTFIELDSIZE, strlen(buffer)); */
+	curl_easy_setopt(conn.handle, CURLOPT_COPYPOSTFIELDS, buffer);
+	/* curl_free(str); */
 	curl_easy_setopt(conn.handle, CURLOPT_REFERER, orderurl);
-	while (order_status != order_executed &&
-	       order_status != order_killed) {
-		fp = fopen("./OrderResponse.html", "w");
-		fp1 = fopen("./OrderResponse.txt", "w");
-		curl_easy_setopt(conn.handle, CURLOPT_WRITEDATA, fp);
-		curl_easy_setopt(conn.handle, CURLOPT_HEADERDATA, fp1);
-		if ((err = perform_request())) {
-			fclose(fp1);
-			fclose(fp);
-			break;
-		}
-		order_status = get_order_status(fp);
+	curl_easy_setopt(conn.handle, CURLOPT_URL, orderurl);
+	curl_easy_setopt(conn.handle, CURLOPT_FOLLOWLOCATION, 1);
+	curl_easy_setopt(conn.handle, CURLOPT_AUTOREFERER, 1);
+	/* write_out_cookies(); */
+	if ((err = perform_request())) {
 		fclose(fp1);
 		fclose(fp);
-		if (order_status != order_executed &&
-		    order_status != order_killed)
-			sleep(15);
+		return err;
 	}
+	fclose(fp);
+	fclose(fp1);
+
+	/* confirm that the order has been executed */
+	sleep(20);
+	hld_qtt = get_hld_qtt();
+	if (action == action_buy && hld_qtt ==
+	    my_position.hld_qtt + my_position.quantity) {
+		order_status = order_executed;
+		my_position.hld_qtt = hld_qtt;
+	} else if (action == action_sell && hld_qtt ==
+		   my_position.hld_qtt - my_position.quantity) {
+		order_status = order_executed;
+		my_position.hld_qtt = hld_qtt;
+	} else
+		/* We use the fill-or-kill condition */
+		order_status = order_killed;
+
 	ret = order_status == order_executed ? 0 : 1;
-end:
 	g_list_free_full(list, g_free);
 #else
 	ret = 0;
