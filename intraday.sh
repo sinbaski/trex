@@ -29,7 +29,7 @@ function start_trading {
 
 if [ "$wd" != `pwd` ]; then cd $wd; fi
 
-for dir in transactions records logs indicators; do
+for dir in transactions records logs positions; do
     if [ ! -d $dir ]; then
 	mkdir $dir
     fi
@@ -44,34 +44,21 @@ fi
 command="$1"
 shift
 
-if [ -n "`ps -C intraday -o pid=`" ]; then
-    running=1
-fi
-
 case $command in
-status)
-	if [ -n "$running" ]; then
-	    echo "$0 is up and running"
-	else
-	    echo "$0 is not running"
-	fi
-	;;
 start)
-	if [ -n "$running" ]; then
-	    echo "$0 already up and running"
-	    exit 0
+	if [ -z "`ps -C alarm.sh -o pid=`" ]; then
+	    ./alarm.sh &
 	fi
-	./alarm.sh &
 	start_trading
 	;;
 stop)
-	if [ -n "$running" ]; then
-	    killall intraday
-	fi
+	killall intraday &> /tmp/null
+	killall alarm.sh &> /tmp/null
 	;;
 restart)
-	if [ -n "$running" ]; then
-	    killall intraday
+	killall intraday &> /tmp/null
+	if [ -z "`ps -C alarm.sh -o pid=`" ]; then
+	    ./alarm.sh &
 	fi
 	start_trading
 	;;

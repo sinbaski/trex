@@ -119,6 +119,15 @@ static void free_trade (void *p)
 	g_slice_free(struct trade, p);
 }
 
+static int trade_equal(const struct trade *t1, const struct trade *t2)
+{
+	return 	strcmp(t1->market, t2->market) == 0 &&
+		strcmp(t1->time, t2->time) == 0 &&
+		t1->price - t2->price > -0.01 &&
+		t1->price - t2->price < 0.01 &&
+		t1->quantity == t2->quantity;
+}
+
 static void log_data(const GList *node)
 {
 	FILE *datafile = fopen(get_filename("records", ".dat"), "a");
@@ -374,7 +383,7 @@ static int login(void)
 		fprintf(stderr, "[%s] %s: curl_easy_perform() failed. "
 			"Error %d: %s\n", get_timestring(), __func__,
 			code, conn.errbuf);
-		sleep(100 + rand() % 140);
+		sleep(100 + rand() % 200);
 		ret = code != 0 ? code : -EPIPE;
 		goto end;
 	}
@@ -427,7 +436,7 @@ static CURLcode perform_request(void)
 		"Error %d: %s\n", timestring, __func__,
 		code, conn.errbuf);
 	fflush(stderr);
-	sleep(100 + rand() % 140);
+	sleep(100 + rand() % 200);
 	prepare_connection();
 	return code != 0 ? code : -EPIPE;
 }
@@ -570,6 +579,7 @@ static void collect_data(void)
 	}
 	curl_easy_cleanup(conn.handle);
 	curl_global_cleanup();
+	analyzer_cleanup();
 	g_list_free_full(market.trades, free_trade);
 	g_regex_unref(regex);
 	g_string_free(gstr, TRUE);
@@ -675,7 +685,7 @@ static void signal_handler(int sig, siginfo_t * siginfo, void *context)
 	switch (sig) {
 	case SIGTERM:
 		g_atomic_int_set(&my_status, finished);
-		save_indicators();
+		save_position();
 		break;
 	case SIGPIPE:
 		conn.valid = 0;
@@ -724,7 +734,7 @@ int main(int argc, const char *argv[])
 
 	for (i = 0; i < sizeof(cared_signals)/sizeof(cared_signals[0]); i++)
 		sigaction(cared_signals[i], &act, NULL);
-	restore_indicators();
+	restore_position();
 	srand(time(NULL));
 	curl_global_init(CURL_GLOBAL_ALL);
 	collect_data();

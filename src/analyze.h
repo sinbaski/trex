@@ -42,19 +42,26 @@ struct market {
 /* 	int grp_size; */
 /* }; */
 
+struct price_interval {
+	double p1;
+	long n;
+};
+
 struct timely_indicator {
 	/* lowest average highest */
 	double ind[3];
 	int available;
-	double margin;
+	/*A list of struct price_interval */
+	GList *probdist;
 };
 
 struct indicators {
-	long volume;
+	int initialized;
 	double ret;
 	double avg_ret;
 	double tolerated_loss;
 	unsigned int allow_new_positions:1;
+	const double dprice;
 	struct timely_indicator timely[3];
 };
 
@@ -90,13 +97,12 @@ struct trade_position {
 extern struct trade_position my_position;
 extern struct market market;
 extern char orderbookId[20];
-int indicators_initialized(void);
-void save_indicators(void);
-void restore_indicators(void);
+int inline indicators_initialized(void);
+void save_position(void);
+void restore_position(void);
 time_t parse_time(const char *timestring);
 void set_position(const struct trade_position *position);
 void discard_old_records(int size);
-int trade_equal(const struct trade *t1, const struct trade *t2);
 void analyze();
-
+void analyzer_cleanup(void);
 #endif

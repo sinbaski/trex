@@ -6,6 +6,7 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <assert.h>
+#include <math.h>
 #include <glib.h>
 #include "analyze.h"
 
@@ -21,34 +22,38 @@ const char *action_strings[number_of_action_types] = {
 };
 
 struct indicators indicators = {
-	.volume = 0,
+	.initialized = 0,
 	.timely = {
 		{
-			.margin = 1.2 / 80,
+			.available = 0,
+			.probdist = NULL,
 		},
 		{
-			.margin = 1.2 / 80,
+			.available = 0,
+			.probdist = NULL,
 		},
 		{
-			.margin = 1.2 / 80,
+			.available = 0,
+			.probdist = NULL,
 		},
 	},
 	.tolerated_loss = 250,
 	.allow_new_positions = 1,
-	.avg_ret = 0
+	.avg_ret = 0,
+	.dprice = 0.1
 };
 
 struct {
-	const float min_profit_open;
-	const float min_profit_close;
+	const float min_open_profit;
+	const float min_close_profit;
 } policy = {
-	.min_profit_open = 350,
-	.min_profit_close = 250
+	.min_open_profit = 100,
+	.min_close_profit = 100
 };
 
-int indicators_initialized(void)
+int inline indicators_initialized(void)
 {
-	return indicators.volume > 0;
+	return indicators.initialized;
 }
 
 void set_position(const struct trade_position *position)
@@ -60,19 +65,19 @@ void set_position(const struct trade_position *position)
 	my_position.quantity = position->quantity;
 }
 
-void save_indicators(void)
+void save_position(void)
 {
-	FILE *fp = fopen(get_filename("indicators", ".ind"), "w");
-	fwrite(&indicators, sizeof(indicators), 1, fp);
+	FILE *fp = fopen(get_filename("positions", ".pos"), "w");
+	fwrite(&my_position, sizeof(my_position), 1, fp);
 	fclose(fp);
 }
 
-void restore_indicators(void)
+void restore_position(void)
 {
-	FILE *fp = fopen(get_filename("indicators", ".ind"), "r");
+	FILE *fp = fopen(get_filename("positions", ".pos"), "r");
 	if (!fp)
 		return;
-	fread(&indicators, sizeof(indicators), 1, fp);
+	fread(&my_position, sizeof(my_position), 1, fp);
 	fclose(fp);
 }
 
@@ -130,18 +135,6 @@ static long fnum_of_line(FILE *datafile)
 	return length / DATA_ROW_WIDTH;
 }
 
-static int is_trapped(void)
-{
-	int trapped;
-	if (my_position.status != incomplete)
-		return 0;
-	if (my_position.mode == buy_and_sell)
-		trapped = indicators.timely[2].ind[1] < my_position.price;
-	else
-		trapped = indicators.timely[2].ind[1] > my_position.price;
-	return trapped;
-}
-
 static double cal_ret(FILE *datafile, long n1, long n2)
 {
 	long l = ftell(datafile);
@@ -176,16 +169,65 @@ static double cal_avg_ret(FILE *datafile, long n, long m)
 	return sum / n;
 }
 
+static double floor_price(double price)
+{
+	double x = floor(price);
+	while (x < price) x += indicators.dprice;
+	return x - indicators.dprice;
+}
+
+static struct price_interval *new_price_interval(const struct trade *trade)
+{
+	struct price_interval *x;
+	x = g_slice_new(struct price_interval);
+	x->p1 = floor_price(trade->price);
+	x->n = trade->quantity;
+	return x;
+}
+
+static inline int price_in(const struct price_interval *intvl, double price)
+{
+	return price >= intvl->p1 && price < intvl->p1 + indicators.dprice;
+}
+
+static void update_probdist(GList **list, const struct trade *trade, int plus)
+{
+	GList *node;
+	assert(list != NULL);
+
+	for (node = *list; node != NULL; node = node->next) {
+		struct price_interval *itv;
+
+		itv = (struct price_interval *)node->data;
+		if (trade->price < itv->p1) {
+			struct price_interval *itv2 =
+				new_price_interval(trade);
+			*list = g_list_insert_before(*list, node, itv2);
+		} else if (price_in(itv, trade->price)) {
+			if (plus)
+				itv->n += trade->quantity;
+			else
+				itv->n -= trade->quantity;
+				
+			return;
+		}
+	}
+	*list = g_list_append(*list, new_price_interval(trade));
+}
+
 static void cal_indicator(FILE *datafile, time_t since, int idx)
 {
 	struct trade trade;
 	const char *sincestr;
-	double x, y;
-	int i;
+	/* double x, y; */
+	long i, n;
 	long tot;
-	double percentage[] = {
-		0.8, 1.0, 1.1
-	};
+	/* the latest trade covered last time */
+	static long mark = 0;
+	
+	/* double percentage[] = { */
+	/* 	0.5, 0.7, 0.9 */
+	/* }; */
 	struct timely_indicator *ind = indicators.timely + idx;
 
 	if (get_trade(datafile, 0, NULL) > since ||
@@ -195,55 +237,47 @@ static void cal_indicator(FILE *datafile, time_t since, int idx)
 		return;
 	}
 	sincestr = make_timestring(since);
-	ind->ind[1] = ind->ind[2] = ind->ind[0] = 0;
 	tot = 0;
 	for (i = 1; 1; i++) {
 		fseek(datafile, -i * DATA_ROW_WIDTH, SEEK_END);
 		fscanf(datafile, "%s\t%s\t%lf\t%ld",
 		       trade.market, trade.time, &trade.price,
 		       &trade.quantity);
-		if (strcmp(trade.time, sincestr) < 0)
+		if (strcmp(trade.time, sincestr) < 0) {
+			i--;
 			break;
+		}
 		tot += trade.quantity;
-		ind->ind[1] += (trade.price * trade.quantity)/tot
-			- ind->ind[1] * trade.quantity / tot;
-		ind->ind[2] = MAX(ind->ind[2], trade.price);
-		ind->ind[0] = ind->ind[0] ? MIN(ind->ind[0], trade.price) :
-			trade.price;
-		/* Break if we are at the beginning of the file */
-		if (ftell(datafile) == 0)
+		update_probdist(&ind->probdist, &trade, 1);
+		if (ftell(datafile) == DATA_ROW_WIDTH)
 			break;
 	}
-	if (my_position.status == complete) {
-		x = (ind->ind[2] - ind->ind[0])
-			* 0.5 * percentage[idx] / ind->ind[1];
-		y = (policy.min_profit_open + fee) / my_position.quantity
-			/ ind->ind[1];
-		ind->margin = MAX(x, y);
-	} else {
-		x = (ind->ind[2] - ind->ind[0]) * 0.5 * 0.6 / ind->ind[1];
-		ind->margin = x;
+	if (i == fnum_of_line(datafile))
+		return;
+	/* Take away the contributions from out-of-date trades */
+	n = fnum_of_line(datafile) - i;
+	for (i = mark; i < n; i++) {
+		fseek(datafile, i * DATA_ROW_WIDTH, SEEK_SET);
+		fscanf(datafile, "%s\t%s\t%lf\t%ld",
+		       trade.market, trade.time, &trade.price,
+		       &trade.quantity);
+		update_probdist(&ind->probdist, &trade, 0);
 	}
+	mark = n;
 	ind->available = 1;
 }
 
 static void dump_indicators(void)
 {
-	int i;
 	struct trade *trade = (struct trade *)market.newest->data;
 	printf("[%s]: %f %lf %lf", trade->time, trade->price,
 	       indicators.ret, indicators.avg_ret);
-	for (i = 0; i < ARRAY_SIZE(indicators.timely); i++) {
-		printf(" {%lf %f}.", indicators.timely[i].ind[1],
-		       indicators.timely[i].margin);
-	}
 }
 
 static void update_indicators()
 {
 	time_t now;
 	FILE *datafile = fopen(get_filename("records", ".dat"), "r");
-	int i;
 	const long grp_size = 40;
 	const long grp_num = 10;
 
@@ -253,16 +287,8 @@ static void update_indicators()
 		return;
 	}
 	now = parse_time(((struct trade *)market.newest->data)->time);
-	if (!indicators.volume) {
-		for (i = 0; i < ARRAY_SIZE(indicators.timely); i++) {
-			int j;
-			for (j = 0; j < ARRAY_SIZE(indicators.timely[i].ind);
-			     j++) {
-				indicators.timely[i].ind[j] = 0;
-			}
-			indicators.timely[i].available = 0;
-		}
-	}
+	if (!indicators.initialized)
+		indicators.initialized = 1;
 	cal_indicator(datafile, now - 20 * 60, 0);
 	cal_indicator(datafile, now - 40 * 60, 1);
 	cal_indicator(datafile, now - 60 * 60, 2);
@@ -336,59 +362,116 @@ static void execute(enum action_type action)
 	}
 }
 
-int trade_equal(const struct trade *t1, const struct trade *t2)
+/*
+  section < 0: percentage of trades whose prices are lower
+  than the given;
+
+  section < 0: percentage of trades whose prices are higher
+  than the given;
+ */
+static double get_price_prob(int section, double price, int idx)
 {
-	return 	strcmp(t1->market, t2->market) == 0 &&
-		strcmp(t1->time, t2->time) == 0 &&
-		t1->price - t2->price > -0.01 &&
-		t1->price - t2->price < 0.01 &&
-		t1->quantity == t2->quantity;
+	struct timely_indicator *ind = indicators.timely + idx;
+	GList *node;
+	long sum, n;
+
+	assert(section != 0);
+	for (node = ind->probdist, sum = 0; node; node = node->next) {
+		struct price_interval *intvl =
+			(struct price_interval *)node->data;
+		sum += intvl->n;
+		if (intvl->p1 + indicators.dprice < price && section < 0)
+			n += intvl->n;
+		else if (intvl->p1 >= price && section > 0)
+			n += intvl->n;
+	}
+	return (double)n/sum;
 }
 
-static enum action_type price_comparer(double latest, int index)
+static int is_trapped(void)
+{
+	double prob;
+	enum {
+		lower_than = -1,
+		higher_than = 1
+	};
+
+	if (my_position.status != incomplete)
+		return 0;
+	if (my_position.mode == buy_and_sell)
+		prob = get_price_prob(higher_than, my_position.price, 2);
+	else
+		prob = get_price_prob(lower_than, my_position.price, 2);
+	return prob <= 0.3;
+}
+
+static enum action_type price_comparer(double latest, int idx)
 {
 	enum action_type action = action_observe;
-	struct timely_indicator *ind = indicators.timely + index;
-	double lim, profit;
+	struct timely_indicator *ind = indicators.timely + idx;
+	double profit, prob, mindiff;
 	double ret = 0.6 * indicators.ret + 0.4 * indicators.avg_ret;
+	enum {
+		lower_than = -1,
+		higher_than = 1
+	};
 
 	if (!ind->available)
 		return action_observe;
+
+	mindiff = (policy.min_open_profit + fee) / my_position.quantity;
 	switch (my_position.mode << 1 | my_position.status) {
 	case 0b00:
-		lim = ind->ind[1] * (1 - ind->margin);
-		if (latest <= lim && ret >= 0.0005)
+		prob = get_price_prob(
+			higher_than, latest + mindiff, idx);
+		if (prob >= 0.8 && ret >= 0.0005)
 			action = action_buy;
 		break;
 	case 0b10:
-		lim = ind->ind[1] * (1 + ind->margin);
-		if (latest >= lim && ret <= -0.0005)
+		prob = get_price_prob(
+			lower_than, latest - mindiff, idx);
+		if (prob >= 0.8 && ret <= -0.0005)
 			action = action_sell;
 		break;
 	case 0b01:
-		lim = ind->ind[1] * (1 + ind->margin);
+		prob = get_price_prob(higher_than, latest, idx);
 		profit = cal_profit(latest);
 		if (ret > 0.0005)
 			action = action_observe;
-		else if (latest > lim)
+		else if (prob <= 0.2)
 			action = action_sell;
-		else if (profit > policy.min_profit_close)
+		else if (profit > policy.min_close_profit)
 			action = action_sell;
 		break;
 	case 0b11:
-		lim = ind->ind[1] * (1 - ind->margin);
+		prob = get_price_prob(lower_than, latest, idx);
 		profit = cal_profit(latest);
 		if (ret < -0.0005)
 			action = action_observe;
-		else if (latest < lim)
+		else if (prob <= 0.2)
 			action = action_buy;
-		else if (profit > policy.min_profit_close)
+		else if (profit > policy.min_close_profit)
 			action = action_buy;
 		break;
 	}
 	if (action != action_observe)
-		printf(" %s-%d:", __func__, index);
+		printf(" %s-%d:", __func__, idx);
 	return action;
+}
+
+static void free_price_interval(void *p)
+{
+	g_slice_free(struct price_interval, p);
+}
+
+void analyzer_cleanup(void)
+{
+	int i;
+	for (i = 0; i < ARRAY_SIZE(indicators.timely); i++) {
+		g_list_free_full(
+			indicators.timely[i].probdist,
+			free_price_interval);
+	}
 }
 
 void analyze()
