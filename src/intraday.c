@@ -247,7 +247,6 @@ void discard_old_records(int size)
 		market.trades = g_list_delete_link(market.trades,
 						   market.trades);
 	}
-	market.trades_count -= size;
 	fflush(stderr);
 }
 
@@ -257,8 +256,9 @@ static void refine_data(FILE *fp, const GRegex *regex)
 	enum {
 		before, between, within, after
 	} position = before;
-	GList *last;
-	int new_trades = market.trades_count;
+	int trades_count = g_list_length(market.trades);
+	int new_trades = 0;
+	int gp =  trades_count;
 	while (fgets(buffer, sizeof(buffer), fp) &&
 		position != after) {
 		int len = strlen(buffer);
@@ -282,37 +282,17 @@ static void refine_data(FILE *fp, const GRegex *regex)
 				fprintf(stderr, "%s\n", buffer);
 				continue;
 			}
-			if (!market.trades) {
-				struct trade *p =
-					g_slice_dup(struct trade, &trade);
-				if (!p) {
-					fprintf(stderr, "%s: No memory.\n",
-						__func__);
-					g_atomic_int_set(&my_status, finished);
-					return;
-				}
-				/* fprintf(stderr, "%s: allocated %p.\n", __func__, p); */
-				market.trades = g_list_append(
-					market.trades, p);
-				market.newest = market.trades;
-				market.trades_count = 1;
-			} else if (trade_equal(&trade, (struct trade *)
-					       market.newest->data)) {
+			if (gp != 0 && trade_equal(
+				    &trade, (struct trade *)
+				    g_list_nth_data(market.trades,
+						    gp - 1)))
 				goto end;
-			} else {
+			else {
 				struct trade *p =
 					g_slice_dup(struct trade, &trade);
-				if (!p) {
-					fprintf(stderr, "%s: No memory.\n",
-						__func__);
-					fflush(stderr);
-					g_atomic_int_set(&my_status, finished);
-					return;
-				}
-				/* fprintf(stderr, "%s: allocated %p.\n", __func__, p); */
-				market.trades = g_list_insert_before(
-					market.trades, market.newest->next, p);
-				market.trades_count++;
+				market.trades = g_list_insert(
+					market.trades, p, gp);
+				new_trades++;
 			}
 			break;
 		}
@@ -321,27 +301,18 @@ static void refine_data(FILE *fp, const GRegex *regex)
 		}
 	}
 end:
-	new_trades = market.trades_count - new_trades;
-	last = g_list_last(market.trades);
-	/* No data added */
-	if (last == market.newest)
+	if (new_trades == 0)
 		return;
-	else if (market.newest == market.trades) {
-		market.trades = g_list_remove_link(market.trades,
-						   market.newest);
-		last->next = market.newest;
-		market.newest->prev = last;
-		market.newest->next = NULL;
-		market.earliest_updated = market.trades;
+	else if (trades_count == 0) {
+		trades_count = new_trades;
 		log_data(market.trades);
-		if (market.trades_count >= MIN_ANALYSIS_SIZE)
+		if (trades_count >= MIN_ANALYSIS_SIZE)
 			analyze();
 	} else {
-		log_data(market.newest->next);
-		market.earliest_updated = market.newest->next;
-		market.newest = last;
+		log_data(g_list_nth(market.trades,
+				    trades_count - new_trades));
 		if (!indicators_initialized() &&
-		    market.trades_count < MIN_ANALYSIS_SIZE) {
+		    trades_count < MIN_ANALYSIS_SIZE) {
 			return;
 		}
 		if (indicators_initialized() && new_trades < MIN_NEW_TRADES)
@@ -488,6 +459,16 @@ static long get_hld_qtt(void)
 	return n;
 }
 
+static inline void update_watcher(void)
+{
+	char buf[20];
+	FILE *fp;
+	sprintf(buf, "watcher-%s", orderbookId);
+	fp = fopen(buf, "w");
+	fprintf(fp, "Active\n");
+	fclose(fp);
+}
+
 static void collect_data(void)
 {
 	GRegex *regex;
@@ -506,7 +487,7 @@ static void collect_data(void)
 	/* 		"avslut.jsp?password=2Oceans?" */
 	/* 		"&orderbookId=%s&username=sinbaski", */
 	/* 		orderbookId); */
-
+	update_watcher();
 	prepare_connection();
 	my_position.hld_qtt = get_hld_qtt();
 	for (i = 0; g_atomic_int_get(&my_status) == collecting; i = 1) {
@@ -515,7 +496,8 @@ static void collect_data(void)
 #if !USE_FAKE_SOURCE
 		time_t t1, t2;
 #endif
-
+		/* Report to the watcher that I am active */
+		update_watcher();
 		fp = fopen("./intraday.html", "w");
 		if (i == 0)
 			memset(&market, 0, sizeof(market));
@@ -588,7 +570,7 @@ static void collect_data(void)
 int send_order(enum action_type action)
 {
 	const struct stock_info *info = get_stock_info(orderbookId);
-	struct trade *trade = (struct trade *)market.newest->data;
+	struct trade *trade = (struct trade *)g_list_last(market.trades)->data;
 	double latest = trade->price;
 	char buffer[1024];
 	int ret;
