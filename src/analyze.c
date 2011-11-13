@@ -399,7 +399,7 @@ static double get_price_prob(int section, double price, int idx)
 	long sum, n;
 
 	assert(section != 0);
-	for (node = ind->probdist, sum = 0; node; node = node->next) {
+	for (node = ind->probdist, sum = n = 0; node; node = node->next) {
 		struct price_interval *intvl =
 			(struct price_interval *)node->data;
 		sum += intvl->n;
@@ -508,9 +508,10 @@ void analyze()
 	switch (my_position.status) {
 	case incomplete: {
 		double profit = cal_profit(latest);
-		int trapped = is_trapped();
+		int trapped;
 		if (profit > 0 && action != action_observe)
 			break;
+		trapped = is_trapped();
 		if (!trapped && profit < 0) {
 			action = action_observe;
 			break;
