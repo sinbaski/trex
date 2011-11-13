@@ -29,7 +29,7 @@ function start_trading {
 
 if [ "$wd" != `pwd` ]; then cd $wd; fi
 
-for dir in transactions records logs positions; do
+for dir in transactions records logs positions probdist; do
     if [ ! -d $dir ]; then
 	mkdir $dir
     fi
