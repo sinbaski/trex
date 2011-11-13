@@ -148,6 +148,20 @@ static void log_data(int idx)
 	fclose(datafile);
 }
 
+#if !USE_FAKE_SOURCE
+static void refresh_conn(void)
+{
+	curl_easy_reset(conn.handle);
+	curl_easy_setopt(conn.handle, CURLOPT_ERRORBUFFER, conn.errbuf);
+	curl_easy_setopt(conn.handle, CURLOPT_TIMEOUT, TRANSFER_TIMEOUT);
+	curl_easy_setopt(conn.handle, CURLOPT_USERAGENT,
+			 "Mozilla/5.0 (compatible; MSIE 9.0; "
+			 "Windows NT 6.1; WOW64; Trident/5.0)");
+	if (g_atomic_int_get(&my_status) != registering)
+		curl_easy_setopt(conn.handle, CURLOPT_COOKIEFILE, COOKIE_FILE);
+}
+#endif
+
 #if 0
 static void write_out_cookies(void)
 {
@@ -162,21 +176,7 @@ static void write_out_cookies(void)
 	fclose(fp);
 	curl_slist_free_all(list);
 }
-#endif
 
-static void refresh_conn(void)
-{
-	curl_easy_reset(conn.handle);
-	curl_easy_setopt(conn.handle, CURLOPT_ERRORBUFFER, conn.errbuf);
-	curl_easy_setopt(conn.handle, CURLOPT_TIMEOUT, TRANSFER_TIMEOUT);
-	curl_easy_setopt(conn.handle, CURLOPT_USERAGENT,
-			 "Mozilla/5.0 (compatible; MSIE 9.0; "
-			 "Windows NT 6.1; WOW64; Trident/5.0)");
-	if (g_atomic_int_get(&my_status) != registering)
-		curl_easy_setopt(conn.handle, CURLOPT_COOKIEFILE, COOKIE_FILE);
-}
-
-#if 0
 static void extract_header_field(const char *field, GList **values, FILE *fp)
 {
 	GRegex *regex;
@@ -381,6 +381,7 @@ static void prepare_connection(void)
 	}
 }
 
+#if !USE_FAKE_SOURCE
 static CURLcode perform_request(void)
 {
 	CURLcode code;
@@ -446,6 +447,7 @@ static long get_hld_qtt(void)
 	g_regex_unref(regex);
 	return n;
 }
+#endif
 
 static inline void update_watcher(void)
 {
@@ -477,7 +479,10 @@ static void collect_data(void)
 	/* 		orderbookId); */
 	update_watcher();
 	prepare_connection();
+
+#if !USE_FAKE_SOURCE
 	my_position.hld_qtt = get_hld_qtt();
+#endif
 	for (i = 0; g_atomic_int_get(&my_status) == collecting; i = 1) {
 		struct stat st;
 		FILE *fp;

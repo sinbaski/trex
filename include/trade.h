@@ -67,6 +67,17 @@
 
 #define ARRAY_SIZE(x) (sizeof(x)/sizeof(x[0]))
 
+static inline long fnum_of_line(FILE *datafile)
+{
+	long offset = ftell(datafile);
+	long length;
+
+	fseek(datafile, 0, SEEK_END);
+	length = ftell(datafile);
+	fseek(datafile, offset, SEEK_SET);
+	return length / DATA_ROW_WIDTH;
+}
+
 struct trade {
 	char market[10];
 	char time[9];

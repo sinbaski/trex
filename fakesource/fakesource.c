@@ -8,6 +8,7 @@
 
 #define DATA_XCHG_FILE "./intraday.html"
 #define PI 3.1416
+#define BATCH_SIZE 15
 
 int get_fake_trade(double t, struct trade *trade)
 {
@@ -30,10 +31,19 @@ int get_fake_trade(double t, struct trade *trade)
 
 int get_real_trade(struct trade *trade, FILE *datafile)
 {
+	static long offset = BATCH_SIZE;
+	static long n = 2;
+
+	fseek(datafile, --offset * DATA_ROW_WIDTH, SEEK_SET);
+	if (offset % BATCH_SIZE == 0) {
+		offset = BATCH_SIZE * n++;
+		if (offset >= fnum_of_line(datafile))
+			return 1;
+	}
 	fscanf(datafile, "%s\t%s\t%lf\t%ld",
 	       trade->market, trade->time, &trade->price,
 	       &trade->quantity);
-	return feof(datafile);
+	return 0;
 }
 
 int main (int argc, char *argv[])
@@ -42,7 +52,6 @@ int main (int argc, char *argv[])
 	time_t now;
 	FILE *req, *resp;
 	FILE  *datafile = NULL;
-	const int num_records = 30;
 
 	if (argc == 2) {
 		datafile = fopen(argv[1], "r");
@@ -53,6 +62,7 @@ int main (int argc, char *argv[])
 	do {
 		FILE *fp;
 		int i;
+		long n = 0;
 		struct tm *timep;
 		req = fopen("./req-fifo", "r");
 		fscanf(req, "%s", message);
@@ -65,21 +75,21 @@ int main (int argc, char *argv[])
 		fprintf(fp, "Antal</TD></TR>\n");
 
 		time(&now);
-		for (i = 0; i < num_records; i++) {
-			double secs = (num_records - i) * 35.0f / num_records;
+		now += n++ * 60;
+
+		for (i = 0; i < BATCH_SIZE; i++) {
 			struct trade trade;
 			int l, m;
+			now += BATCH_SIZE - i;
+			timep = localtime(&now);
 			if (!datafile) {
-				done = get_fake_trade(now - secs, &trade);
-				now = (time_t)round(now - secs);
-				timep = localtime(&now);
+				done = get_fake_trade(now, &trade);
 				sprintf(trade.time, "%02d:%02d:%02d",
 					timep->tm_hour, timep->tm_min,
 					timep->tm_sec);
 				sprintf(trade.market, "FAKE");
-			} else {
-				done = get_real_trade(&trade, datafile);
-			}
+			} else if ((done = get_real_trade(&trade, datafile)))
+				break;
 			l = (int)floor(trade.price);
 			m = (int)((trade.price - l) * 100);
 			fprintf(fp, "<TR><TD>ABC</TD><TD>CBA</TD><TD>%s</TD>",
