@@ -27,14 +27,17 @@ struct indicators indicators = {
 		{
 			.available = 0,
 			.probdist = NULL,
+			.mark = 0,
 		},
 		{
 			.available = 0,
 			.probdist = NULL,
+			.mark = 0,
 		},
 		{
 			.available = 0,
 			.probdist = NULL,
+			.mark = 0,
 		},
 	},
 	.tolerated_loss = 250,
@@ -124,15 +127,9 @@ static time_t get_trade(FILE *datafile, long n, struct trade *trade1)
 	return parse_time(trade->time);
 }
 
-static long fnum_of_line(FILE *datafile)
+static void free_price_interval(void *p)
 {
-	long offset = ftell(datafile);
-	long length;
-
-	fseek(datafile, 0, SEEK_END);
-	length = ftell(datafile);
-	fseek(datafile, offset, SEEK_SET);
-	return length / DATA_ROW_WIDTH;
+	g_slice_free(struct price_interval, p);
 }
 
 static double cal_ret(FILE *datafile, long n1, long n2)
@@ -171,7 +168,7 @@ static double cal_avg_ret(FILE *datafile, long n, long m)
 
 static double floor_price(double price)
 {
-	double x = floor(price);
+	double x = floor(price) + 0.01;
 	while (x < price) x += indicators.dprice;
 	return x - indicators.dprice;
 }
@@ -203,12 +200,18 @@ static void update_probdist(GList **list, const struct trade *trade, int plus)
 			struct price_interval *itv2 =
 				new_price_interval(trade);
 			*list = g_list_insert_before(*list, node, itv2);
+			return;
 		} else if (price_in(itv, trade->price)) {
 			if (plus)
 				itv->n += trade->quantity;
-			else
+			else {
 				itv->n -= trade->quantity;
-				
+				if (itv->n == 0) {
+					*list = g_list_remove_link(*list, node);
+					g_list_free_full(
+						node, free_price_interval);
+				}
+			}
 			return;
 		}
 	}
@@ -222,8 +225,6 @@ static void cal_indicator(FILE *datafile, time_t since, int idx)
 	/* double x, y; */
 	long i, n;
 	long tot;
-	/* the latest trade covered last time */
-	static long mark = 0;
 	
 	/* double percentage[] = { */
 	/* 	0.5, 0.7, 0.9 */
@@ -256,22 +257,43 @@ static void cal_indicator(FILE *datafile, time_t since, int idx)
 		return;
 	/* Take away the contributions from out-of-date trades */
 	n = fnum_of_line(datafile) - i;
-	for (i = mark; i < n; i++) {
+	for (i = ind->mark; i < n; i++) {
 		fseek(datafile, i * DATA_ROW_WIDTH, SEEK_SET);
 		fscanf(datafile, "%s\t%s\t%lf\t%ld",
 		       trade.market, trade.time, &trade.price,
 		       &trade.quantity);
 		update_probdist(&ind->probdist, &trade, 0);
 	}
-	mark = n;
+	ind->mark = n;
 	ind->available = 1;
 }
 
 static void dump_indicators(void)
 {
-	struct trade *trade = (struct trade *)market.newest->data;
+	struct trade *trade = (struct trade *)g_list_last(market.trades)->data;
 	printf("[%s]: %f %lf %lf", trade->time, trade->price,
 	       indicators.ret, indicators.avg_ret);
+}
+
+static void dump_probdist(void)
+{
+	struct trade *trade = (struct trade *)g_list_last(market.trades)->data;
+	FILE *fp = fopen(get_filename("probdist", ".txt"), "a");
+	GList *node;
+	int i;
+
+	fprintf(fp, "[%s]:\n", trade->time);
+	for (i = 0; i < ARRAY_SIZE(indicators.timely); i++) {
+		struct timely_indicator *ind = indicators.timely + i;
+		for (node = ind->probdist; node; node = node->next) {
+			struct price_interval *val =
+				(struct price_interval *)node->data;
+			fprintf(fp, "%5.2lf,%ld   ", val->p1, val->n);
+			if (node->next == NULL)
+				fprintf(fp, "\n");
+		}
+	}
+	fclose(fp);
 }
 
 static void update_indicators()
@@ -280,13 +302,13 @@ static void update_indicators()
 	FILE *datafile = fopen(get_filename("records", ".dat"), "r");
 	const long grp_size = 40;
 	const long grp_num = 10;
-
+	struct trade *trade= (struct trade *)g_list_last(market.trades)->data;
 	if (!datafile) {
 		fprintf(stderr, "%s: Failed to open datafile. Error %d.\n",
 			__func__, errno);
 		return;
 	}
-	now = parse_time(((struct trade *)market.newest->data)->time);
+	now = parse_time(trade->time);
 	if (!indicators.initialized)
 		indicators.initialized = 1;
 	cal_indicator(datafile, now - 20 * 60, 0);
@@ -306,6 +328,7 @@ static void update_indicators()
 	fclose(datafile);
 
 	dump_indicators();
+	dump_probdist();
 }
 
 static double cal_profit(double price)
@@ -325,7 +348,7 @@ static double cal_profit(double price)
 
 static void execute(enum action_type action)
 {
-	struct trade *trade = (struct trade *)market.newest->data;
+	struct trade *trade = (struct trade *)g_list_last(market.trades)->data;
 	double price = trade->price;
 
 	switch (my_position.mode << 2 | my_position.status << 1 | action) {
@@ -459,11 +482,6 @@ static enum action_type price_comparer(double latest, int idx)
 	return action;
 }
 
-static void free_price_interval(void *p)
-{
-	g_slice_free(struct price_interval, p);
-}
-
 void analyzer_cleanup(void)
 {
 	int i;
@@ -477,7 +495,7 @@ void analyzer_cleanup(void)
 void analyze()
 {
 	enum action_type action = action_observe;
-	struct trade *trade = (struct trade *)market.newest->data;
+	struct trade *trade = (struct trade *)g_list_last(market.trades)->data;
 	double latest = trade->price;
 	int i;
 
@@ -513,7 +531,7 @@ void analyze()
 		execute(action);
 	else
 		printf(" Observe.\n");
-	discard_old_records(market.trades_count - MAX_TRADES_COUNT);
+	discard_old_records(g_list_length(market.trades) - MAX_TRADES_COUNT);
 	fflush(stdout);
 }
 

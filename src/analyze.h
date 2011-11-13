@@ -25,22 +25,7 @@ struct order_depth {
 struct market {
 	struct order_depth order_depth;
 	GList *trades;
-	GList *newest;
-	GList *earliest_updated;
-	long trades_count;
 };
-
-/* enum trend { */
-/* 	trend_up = 0, */
-/* 	trend_down, */
-/* 	trend_unclear, */
-/* 	number_of_trend_types */
-/* }; */
-
-/* struct trend_indicator { */
-/* 	enum trend trend; */
-/* 	int grp_size; */
-/* }; */
 
 struct price_interval {
 	double p1;
@@ -51,6 +36,7 @@ struct timely_indicator {
 	/* lowest average highest */
 	double ind[3];
 	int available;
+	long mark;
 	/*A list of struct price_interval */
 	GList *probdist;
 };
