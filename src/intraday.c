@@ -128,9 +128,10 @@ static int trade_equal(const struct trade *t1, const struct trade *t2)
 		t1->quantity == t2->quantity;
 }
 
-static void log_data(const GList *node)
+static void log_data(int idx)
 {
 	FILE *datafile = fopen(get_filename("records", ".dat"), "a");
+	const GList *node = g_list_nth(market.trades, idx);
 	if (!datafile) {
 		fprintf(stderr, "%s: Failed to open datafile. Error %d.\n",
 			__func__, errno);
@@ -256,9 +257,8 @@ static void refine_data(FILE *fp, const GRegex *regex)
 	enum {
 		before, between, within, after
 	} position = before;
-	int trades_count = g_list_length(market.trades);
+	int gp = g_list_length(market.trades);
 	int new_trades = 0;
-	int gp =  trades_count;
 	while (fgets(buffer, sizeof(buffer), fp) &&
 		position != after) {
 		int len = strlen(buffer);
@@ -303,22 +303,10 @@ static void refine_data(FILE *fp, const GRegex *regex)
 end:
 	if (new_trades == 0)
 		return;
-	else if (trades_count == 0) {
-		trades_count = new_trades;
-		log_data(market.trades);
-		if (trades_count >= MIN_ANALYSIS_SIZE)
-			analyze();
-	} else {
-		log_data(g_list_nth(market.trades,
-				    trades_count - new_trades));
-		if (!indicators_initialized() &&
-		    trades_count < MIN_ANALYSIS_SIZE) {
-			return;
-		}
-		if (indicators_initialized() && new_trades < MIN_NEW_TRADES)
-			return;
+	log_data(gp);
+	if (g_list_length(market.trades) >= MIN_ANALYSIS_SIZE && 
+	    (new_trades >= MIN_NEW_TRADES || !indicators_initialized()))
 		analyze();
-	}
 }
 
 size_t store_cookie(void *ptr, size_t size, size_t nmemb, void *userdata)
