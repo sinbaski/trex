@@ -11,11 +11,10 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <curl/curl.h>
-#include <glib.h>
-#include <glib/gprintf.h>
 #include "analyze.h"
+#include "utilities.h"
 
-#define MIN_NEW_TRADES 10
+#define MIN_NEW_TRADES 8
 #define TRANSFER_TIMEOUT 60 * 5 /* 5 minutes */
 #define WORKDIR "/home/xxie/work/avanza/data_extract/intraday"
 #define COOKIE_FILE "./cookies.txt"
@@ -26,13 +25,6 @@ enum status {
 	registering,
 	collecting,
 	finished
-};
-
-enum order_status {
-	order_executed = 0,
-	order_in_market,
-	order_waiting,
-	order_killed
 };
 
 struct connection {
@@ -128,27 +120,41 @@ static int trade_equal(const struct trade *t1, const struct trade *t2)
 		t1->quantity == t2->quantity;
 }
 
-static void log_data(int idx)
+static int log_data(int idx)
 {
-	FILE *datafile = fopen(get_filename("records", ".dat"), "a");
+	FILE *datafile;
 	const GList *node = g_list_nth(market.trades, idx);
-	if (!datafile) {
-		fprintf(stderr, "%s: Failed to open datafile. Error %d.\n",
-			__func__, errno);
-		return;
+	struct trade last;
+	static int check_redundancy = 1;
+	int n;
+
+	if (check_redundancy) {
+		datafile = fopen(get_filename("records", ".dat"), "r");
+		if (datafile == NULL)
+			check_redundancy = 0;
+		else {
+			get_trade(datafile, fnum_of_line(datafile) - 1, &last);
+			fclose(datafile);
+		}
 	}
+	datafile = fopen(get_filename("records", ".dat"), "a");
+	n = 0;
 	while (node) {
 		const struct trade *trade =
 			(struct trade *)node->data;
-		fprintf(datafile, "%6s\t%8s\t%7.2lf\t%7ld\n",
-			trade->market, trade->time,
-			trade->price, trade->quantity);
+		if (!check_redundancy || strcmp(trade->time, last.time) >= 0) {
+			fprintf(datafile, "%6s\t%8s\t%7.2lf\t%7ld\n",
+				trade->market, trade->time,
+				trade->price, trade->quantity);
+			check_redundancy = 0;
+			n++;
+		}
 		node = node->next;
 	}
 	fclose(datafile);
+	return n;
 }
 
-#if !USE_FAKE_SOURCE
 static void refresh_conn(void)
 {
 	curl_easy_reset(conn.handle);
@@ -160,14 +166,13 @@ static void refresh_conn(void)
 	if (g_atomic_int_get(&my_status) != registering)
 		curl_easy_setopt(conn.handle, CURLOPT_COOKIEFILE, COOKIE_FILE);
 }
-#endif
 
 #if 0
 static void write_out_cookies(void)
 {
 	FILE *fp = fopen("cookie_dump.txt", "w");
 	struct curl_slist *list, *node;
-	
+
 	curl_easy_getinfo(conn.handle, CURLINFO_COOKIELIST, &list);
 	fprintf(fp, "Known cookies:\n");
 	for (node = list; node != NULL; node = node->next) {
@@ -181,7 +186,7 @@ static void extract_header_field(const char *field, GList **values, FILE *fp)
 {
 	GRegex *regex;
 	GString *gstr = g_string_sized_new(128);
-	char buffer[1000];
+	char buffer[1024];
 	GError *error = NULL;
 
 	g_string_printf(gstr, "%s: *(.+)$", field);
@@ -198,12 +203,6 @@ static void extract_header_field(const char *field, GList **values, FILE *fp)
 	}
 	g_regex_unref(regex);
 	g_string_free(gstr, TRUE);
-}
-
-static enum order_status get_order_status(FILE *fp)
-{
-	assert(fp != NULL);
-	return order_executed;
 }
 #endif
 
@@ -223,7 +222,7 @@ static int extract_data(const char *buffer, struct trade *trade,
 		str = g_match_info_fetch(match_info, 2);
 		strcpy(trade->time, str);
 		g_free(str);
-		
+
 		str = g_match_info_fetch(match_info, 3);
 		str[strlen(str) - 3] = '.';
 		sscanf(str, "%lf", &trade->price);
@@ -258,7 +257,6 @@ static void refine_data(FILE *fp, const GRegex *regex)
 		before, between, within, after
 	} position = before;
 	int gp = g_list_length(market.trades);
-	int new_trades = 0;
 	while (fgets(buffer, sizeof(buffer), fp) &&
 		position != after) {
 		int len = strlen(buffer);
@@ -282,6 +280,8 @@ static void refine_data(FILE *fp, const GRegex *regex)
 				fprintf(stderr, "%s\n", buffer);
 				continue;
 			}
+			if (strcmp(trade.time, "09:00:00") < 0)
+				break;
 			if (gp != 0 && trade_equal(
 				    &trade, (struct trade *)
 				    g_list_nth_data(market.trades,
@@ -292,7 +292,7 @@ static void refine_data(FILE *fp, const GRegex *regex)
 					g_slice_dup(struct trade, &trade);
 				market.trades = g_list_insert(
 					market.trades, p, gp);
-				new_trades++;
+				market.new_trades++;
 			}
 			break;
 		}
@@ -301,12 +301,13 @@ static void refine_data(FILE *fp, const GRegex *regex)
 		}
 	}
 end:
-	if (new_trades == 0)
+	if (market.new_trades == 0 || log_data(gp) == 0)
 		return;
-	log_data(gp);
-	if (g_list_length(market.trades) >= MIN_ANALYSIS_SIZE && 
-	    (new_trades >= MIN_NEW_TRADES || !indicators_initialized()))
+	if (g_list_length(market.trades) >= MIN_ANALYSIS_SIZE &&
+	    (market.new_trades >= MIN_NEW_TRADES || !indicators_initialized())) {
 		analyze();
+		market.new_trades = 0;
+	}
 }
 
 size_t store_cookie(void *ptr, size_t size, size_t nmemb, void *userdata)
@@ -322,7 +323,6 @@ size_t store_cookie(void *ptr, size_t size, size_t nmemb, void *userdata)
 static int login(void)
 {
 	int ret = 0;
-#if !USE_FAKE_SOURCE
 	int code;
 	const char *loginfo = "username=sinbaski&password=2Oceans?";
 	const char *url ="https://www.avanza.se/aza/login/login.jsp";
@@ -350,11 +350,7 @@ static int login(void)
 	/* curl_free(str); */
 end:
 	fflush(stderr);
-#else
-	g_atomic_int_set(&my_status, registering);	
-#endif
 	return ret;
-
 }
 
 static void prepare_connection(void)
@@ -401,6 +397,32 @@ static CURLcode perform_request(void)
 	return code != 0 ? code : -EPIPE;
 }
 
+static double get_enter_price(const char *mark)
+{
+	/* "https://www.avanza.se/aza/order/aktie/kopsalj.jsp" */
+	FILE *datafile = fopen(get_filename("transactions", ".txt"), "r");
+	GRegex *regex;
+	GError *error = NULL;
+	GMatchInfo *match_info;
+	char buffer[128], template[64];
+	double x = -1;
+
+	if (datafile == NULL)
+		return -1;
+	sprintf(template, "p=([0-9.]+).*%s[.].*$", mark);
+	regex = g_regex_new(template, 0, 0, &error);
+	while (fgets(buffer, sizeof(buffer), datafile)) {
+		gchar *str;
+		g_regex_match(regex, buffer, 0, &match_info);
+		if (!g_match_info_matches(match_info))
+			continue;
+		str = g_match_info_fetch(match_info, 1);
+		sscanf(str, "%lf", &x);
+	}
+	g_regex_unref(regex);
+	return x;
+}
+
 /* We must have logged in in order to do this */
 static long get_hld_qtt(void)
 {
@@ -414,6 +436,7 @@ static long get_hld_qtt(void)
 	GMatchInfo *match_info;
 	/* If no match is found, we have 0 shares. */
 	long n = 0;
+	int page_confirmed = 0;
 
 	refresh_conn();
 	curl_easy_setopt(conn.handle, CURLOPT_URL, url);
@@ -430,7 +453,21 @@ static long get_hld_qtt(void)
 	fclose(fp);
 
 	fp = fopen("depa.html", "r");
-	sprintf(buffer, "%s</a></td><td  valign=\"bottom\" "
+	while (fgets(buffer, sizeof(buffer), fp)) {
+		if (g_strrstr(buffer,
+			   "<option value=\"7781011\" selected="
+			   "\"selected\">7781011:") != NULL) {
+			page_confirmed = 1;
+			break;
+		}
+	}
+	if (!page_confirmed) {
+		fclose(fp);
+		prepare_connection();
+		return -1;
+	}
+	fseek(fp, 0, SEEK_SET);
+	sprintf(buffer, ">%s</a></td><td +valign=\"bottom\" +"
 		"class=\"neutral\"><nobr>([0-9]+)</nobr></td>",
 		info->name);
 	regex = g_regex_new(buffer, 0, 0, &error);
@@ -465,6 +502,10 @@ static void collect_data(void)
 	GError *error = NULL;
 	GString *gstr = g_string_sized_new(128);
 	int i;
+	/* The number of shares that we have on the account */
+#if !USE_FAKE_SOURCE
+	long hld_qtt;
+#endif
 	regex = g_regex_new("^<TR.*><TD.*>[^<]*</TD>"
 			    "<TD.*>[^<]*</TD>"
 			    "<TD.*>([A-Z]+)</TD>"
@@ -481,7 +522,19 @@ static void collect_data(void)
 	prepare_connection();
 
 #if !USE_FAKE_SOURCE
-	my_position.hld_qtt = get_hld_qtt();
+	while ((hld_qtt = get_hld_qtt()) < 0);
+	if ((my_position.mode == sell_and_buy &&
+	     hld_qtt < my_position.quantity) ||
+	    (my_position.mode == buy_and_sell &&
+	     hld_qtt > my_position.quantity)) {
+		double x;
+		my_position.status = incomplete;
+		x = get_enter_price(my_position.mode == buy_and_sell ?
+				    "BUY" : "SELL");
+		if (x > 0)
+			my_position.price = x;
+	} else
+		my_position.status = complete;
 #endif
 	for (i = 0; g_atomic_int_get(&my_status) == collecting; i = 1) {
 		struct stat st;
@@ -560,23 +613,135 @@ static void collect_data(void)
 	g_string_free(gstr, TRUE);
 }
 
-int send_order(enum action_type action)
+#if REAL_TRADE
+static int check_aktuella(FILE *fp, long m, long n, enum action_type action,
+			  char buffer[], int size)
+{
+	const struct stock_info *info = get_stock_info(orderbookId);
+	int ret = 0;
+	fseek(fp, m, SEEK_SET);
+	while (!ret && ftell(fp) < n && fgets(buffer, size, fp)) {
+		if (strstr(buffer, info->name)) ret = 1;
+	}
+	return ret;
+}
+
+static int check_avslut(FILE *fp, long n, enum action_type action,
+			char *buffer, int size)
+{
+	const struct stock_info *info = get_stock_info(orderbookId);
+	int ret = 0;
+	int done = 0;
+	int s;
+	fseek(fp, n, SEEK_SET);
+	/* Advance to the table of interest */
+	while (fgets(buffer, size, fp) &&
+	       !strstr(buffer, "<tbody>"));
+	for (s = 0; !done && fgets(buffer, size, fp) &&
+		     !strstr(buffer, "</tbody>");) {
+		int executed;
+		switch (s) {
+		case 0:
+			if (strstr(buffer, "<tr>")) {
+				s = 1;
+				executed = -1;
+			}
+			break;
+		case 1:
+			if (strstr(buffer, ">K&ouml;p</td>") ||
+			    strstr(buffer, ">K\366p</td>")) {
+				executed = action_buy;
+			} else if (strstr(buffer, ">S&auml;lj</td>") ||
+				   strstr(buffer, ">S\344lj</td>")) {
+				executed = action_sell;
+			} else if (strstr(buffer, info->name)) {
+				done = 1;
+				ret = action == executed;
+			} else if (strstr(buffer, "</tr>")) {
+				s = 0;
+			}
+			break;
+		default:;
+		}
+	}
+	return ret;
+}
+
+static enum order_status get_order_status(enum action_type action)
+{
+	enum order_status status;
+	do {
+		FILE *fp = fopen("./OrderResponse.html", "r");
+		long m, n;
+		char buffer[1024];
+		CURLcode err;
+		short int k;
+		for (m = 0, n = 0, k = 0;
+		     n == 0 && fgets(buffer, sizeof(buffer), fp);) {
+			switch(k) {
+			case 0:
+				if (!strstr(buffer, ">Mina aktuella order<"))
+					continue;
+				m = ftell(fp);
+				k = 1;
+				break;
+			case 1:
+				if (!strstr(buffer, ">Mina avslut idag<"))
+					continue;
+				n = ftell(fp) - strlen(buffer);
+				break;
+			}
+		}
+		if (m == 0 || n == 0) {
+			prepare_connection();
+			status = order_failed;
+			break;
+		}
+		if (check_avslut(fp, n, action, buffer, sizeof(buffer))) {
+			fclose(fp);
+			status = order_executed;
+			break;
+		}
+		if (!check_aktuella(fp, m, n, action, buffer, sizeof(buffer))) {
+			fclose(fp);
+			status = order_killed;
+			break;
+		}
+		fclose(fp);
+		sleep(20);
+		do {
+			const char *url = "https://www.avanza.se/aza/order"
+				"/aktie/kopsalj.jsp";
+			update_watcher();
+			fp = fopen("./OrderResponse.html", "w");
+			refresh_conn();
+			curl_easy_setopt(conn.handle, CURLOPT_URL, url);
+			curl_easy_setopt(conn.handle, CURLOPT_FOLLOWLOCATION, 1);
+			curl_easy_setopt(conn.handle, CURLOPT_REFERER, url);
+			curl_easy_setopt(conn.handle, CURLOPT_AUTOREFERER, 1);
+			curl_easy_setopt(conn.handle, CURLOPT_WRITEDATA, fp);
+			err = perform_request();
+			fclose(fp);
+		} while (err != 0);
+	} while (1);
+	return status;
+}
+#endif
+
+enum order_status send_order(enum action_type action)
 {
 	const struct stock_info *info = get_stock_info(orderbookId);
 	struct trade *trade = (struct trade *)g_list_last(market.trades)->data;
-	double latest = trade->price;
 	char buffer[1024];
-	int ret;
+	enum order_status ret;
+	const char *actionstr = action == action_buy ? "buy" : "sell";
+	GString *gstr = make_valid_price(trade->price);
 #if REAL_TRADE
 
-	GList *list = NULL;
 	FILE *fp, *fp1;
-	enum order_status order_status = order_waiting;
 	CURLcode err;
 	const char *orderurl = "https://www.avanza.se/aza"
 		"/order/aktie/kopsalj.jsp";
-	long hld_qtt;
-
 	assert(info != NULL);
 	refresh_conn();
 	fp = fopen("./OrderResponse.html", "w");
@@ -586,64 +751,43 @@ int send_order(enum action_type action)
 	memset(buffer, 0, sizeof(buffer));
 	sprintf(buffer,
 		"advanced=true&account=7781011&orderbookId=%s&market=INET&"
-		"volume=%ld.0&price=%.1f&openVolume=0.0&validDate=%s&"
+		"volume=%ld.0&price=%s&openVolume=0.0&validDate=%s&"
 		"condition=AM&orderType=%s&intendedOrderType=%s&"
 		"toggleClosings=false&toggleOrderDepth=false&"
 		"toggleAdvanced=false&"
 		"searchString=%s&transitionId=%s&commit=true&contractSize=1.0&"
 		"market=INET&currency=SEK&currencyRate=1.0&countryCode=SE&"
 		"orderType=%s&priceMultiplier=1.0&popped=false\n",
-		info->orderid, my_position.quantity, latest, get_datestring(),
-		action == action_buy ? "buy" : "sell",
-		action == action_buy ? "buy" : "sell",
-		info->name,
-		action == action_buy ? "21" : "31",
-		action == action_buy ? "buy" : "sell"
+		info->orderid, my_position.quantity, gstr->str, get_datestring(),
+		actionstr, actionstr, info->name,
+		action == action_buy ? "21" : "31", actionstr
 		);
-	/* str = curl_easy_escape(conn.handle, buffer, strlen(buffer)); */
-	/* curl_easy_setopt(conn.handle, CURLOPT_POSTFIELDSIZE, strlen(buffer)); */
 	curl_easy_setopt(conn.handle, CURLOPT_COPYPOSTFIELDS, buffer);
-	/* curl_free(str); */
 	curl_easy_setopt(conn.handle, CURLOPT_REFERER, orderurl);
 	curl_easy_setopt(conn.handle, CURLOPT_URL, orderurl);
 	curl_easy_setopt(conn.handle, CURLOPT_FOLLOWLOCATION, 1);
 	curl_easy_setopt(conn.handle, CURLOPT_AUTOREFERER, 1);
-	/* write_out_cookies(); */
 	if ((err = perform_request())) {
 		fclose(fp1);
 		fclose(fp);
-		return err;
+		g_string_free(gstr, TRUE);
+		return order_failed;
 	}
 	fclose(fp);
 	fclose(fp1);
 
 	/* confirm that the order has been executed */
-	sleep(20);
-	hld_qtt = get_hld_qtt();
-	if (action == action_buy && hld_qtt ==
-	    my_position.hld_qtt + my_position.quantity) {
-		order_status = order_executed;
-		my_position.hld_qtt = hld_qtt;
-	} else if (action == action_sell && hld_qtt ==
-		   my_position.hld_qtt - my_position.quantity) {
-		order_status = order_executed;
-		my_position.hld_qtt = hld_qtt;
-	} else
-		/* We use the fill-or-kill condition */
-		order_status = order_killed;
-
-	ret = order_status == order_executed ? 0 : 1;
-	g_list_free_full(list, g_free);
+	ret = get_order_status(action);
 #else
-	ret = 0;
+	ret = order_executed;
 #endif
 	sprintf(
 		buffer,
-		"Ladies and gentlemen, may I have your attention? "
-		"I %s to %s %s at %.1f kronor.\n",
-		ret == 0 ? "Succeeded" : "Failed",
-		action == action_buy ? "buy" : "sell",
-		info->name, latest);
+		"%s to %s %s at %s kronor.\n",
+		ret == order_executed ? "succeeded" : "failed",
+		actionstr,
+		info->name, gstr->str);
+	g_string_free(gstr, TRUE);
 	declare(buffer);
 	return ret;
 }
@@ -660,7 +804,6 @@ static void signal_handler(int sig, siginfo_t * siginfo, void *context)
 	switch (sig) {
 	case SIGTERM:
 		g_atomic_int_set(&my_status, finished);
-		save_position();
 		break;
 	case SIGPIPE:
 		conn.valid = 0;
@@ -684,7 +827,7 @@ int main(int argc, const char *argv[])
 		RLIM_INFINITY, RLIM_INFINITY
 	};
 	int i;
-	if (argc < 7) {
+	if (argc < 4) {
 		fprintf(stderr, "Usage: \n"
 			"%s orderbookId mode status price quantity\n", argv[0]);
 		return 0;
@@ -701,15 +844,11 @@ int main(int argc, const char *argv[])
 
 	memset(&po, 0, sizeof(po));
 	sscanf(argv[2], "%d", (int *)&po.mode);
-	sscanf(argv[3], "%d", (int *)&po.status);
-	sscanf(argv[4], "%lf", &po.price);
-	po.enter_time = parse_time(argv[5]);
-	sscanf(argv[6], "%ld", &po.quantity);
+	sscanf(argv[3], "%ld", &po.quantity);
 	set_position(&po);
 
 	for (i = 0; i < sizeof(cared_signals)/sizeof(cared_signals[0]); i++)
 		sigaction(cared_signals[i], &act, NULL);
-	restore_position();
 	srand(time(NULL));
 	curl_global_init(CURL_GLOBAL_ALL);
 	collect_data();

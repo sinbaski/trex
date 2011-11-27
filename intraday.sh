@@ -6,30 +6,18 @@ stock=183828
 # 1: sell-and-buy
 mode=1
 
-# 0: complete
-# 1: incomplete
-status=0
-
-# entering price
-# ignored when status = 0
-price=99.7
-
-# time when the current incomplete position
-# is entered.
-enter_time="06:00:00"
-
 # entering quantity
 quantity=830
 
 wd=/home/xxie/work/avanza/data_extract/intraday
 
 function start_trading {
-    ./intraday $stock $mode $status $price $enter_time$ $quantity
+    ./intraday $stock $mode $quantity
 }
 
 if [ "$wd" != `pwd` ]; then cd $wd; fi
 
-for dir in transactions records logs positions probdist; do
+for dir in transactions records logs probdist; do
     if [ ! -d $dir ]; then
 	mkdir $dir
     fi

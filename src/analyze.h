@@ -24,11 +24,12 @@ struct order_depth {
 
 struct market {
 	struct order_depth order_depth;
+	int new_trades;
 	GList *trades;
 };
 
 struct price_interval {
-	double p1;
+	char price[20];
 	long n;
 };
 
@@ -36,7 +37,10 @@ struct timely_indicator {
 	/* lowest average highest */
 	double ind[3];
 	int available;
+	/* last excluded line */
 	long mark;
+	long sample_size;
+	int period;
 	/*A list of struct price_interval */
 	GList *probdist;
 };
@@ -47,8 +51,13 @@ struct indicators {
 	double avg_ret;
 	double tolerated_loss;
 	unsigned int allow_new_positions:1;
-	const double dprice;
 	struct timely_indicator timely[3];
+};
+
+struct trade_const {
+	const double dprice;
+	const char *dpricestr;
+	const int dpricepcr;
 };
 
 enum trade_mode {
@@ -68,25 +77,32 @@ enum action_type {
 	number_of_action_types,
 };
 
+enum order_status {
+	order_executed = 0,
+	order_killed,
+	order_failed,
+};
+
 struct trade_position {
 	enum trade_mode mode;
 	enum trade_status status;
 	double price;
 	/* The number of shares we trade */
 	long quantity;
-	/* The number of shares that we have on the account */
-	long hld_qtt;
-	/* The time at which the position is entered */
-	time_t enter_time;
 };
+
 
 extern struct trade_position my_position;
 extern struct market market;
 extern char orderbookId[20];
+extern struct trade_const trade_constants;
+
 int inline indicators_initialized(void);
-void save_position(void);
-void restore_position(void);
+/* void save_position(void); */
+/* void restore_position(void); */
+time_t get_trade(FILE *datafile, long n, struct trade *trade1);
 time_t parse_time(const char *timestring);
+enum order_status send_order(enum action_type action);
 void set_position(const struct trade_position *position);
 void discard_old_records(int size);
 void analyze();
