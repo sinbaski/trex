@@ -392,7 +392,7 @@ static CURLcode perform_request(void)
 		"Error %d: %s\n", timestring, __func__,
 		code, conn.errbuf);
 	fflush(stderr);
-	sleep(100 + rand() % 200);
+	sleep(100 + rand() % 140);
 	prepare_connection();
 	return code != 0 ? code : -EPIPE;
 }
@@ -736,6 +736,11 @@ enum order_status send_order(enum action_type action)
 	enum order_status ret;
 	const char *actionstr = action == action_buy ? "buy" : "sell";
 	GString *gstr = make_valid_price(trade->price);
+	const char *statusstr[] = {
+		[order_executed] = "executed",
+		[order_killed] = "killed",
+		[order_failed] = "unsuccessful"
+	};
 #if REAL_TRADE
 
 	FILE *fp, *fp1;
@@ -783,10 +788,9 @@ enum order_status send_order(enum action_type action)
 #endif
 	sprintf(
 		buffer,
-		"%s to %s %s at %s kronor.\n",
-		ret == order_executed ? "succeeded" : "failed",
-		actionstr,
-		info->name, gstr->str);
+		/* "%s to %s %s at %s kronor.\n", */
+		"The order to %s %s at %s is %s.\n",
+		actionstr, info->name, gstr->str, statusstr[ret]);
 	g_string_free(gstr, TRUE);
 	declare(buffer);
 	return ret;

@@ -385,13 +385,12 @@ static void update_indicators()
 #else
 	indicators.allow_new_positions = 1;
 #endif
-	if (fnum_of_line(datafile) < grp_num * grp_size) {
+	if (fnum_of_line(datafile) < grp_num * grp_size - (grp_num - 1)) {
 		fclose(datafile);
 		return;
 	}
 	indicators.ret = cal_ret(datafile, 0, grp_size);
-	if (fnum_of_line(datafile) >= grp_num * grp_size - (grp_num - 1))
-		indicators.avg_ret = cal_avg_ret(datafile, grp_num, grp_size);
+	indicators.avg_ret = cal_avg_ret(datafile, grp_num, grp_size);
 	fclose(datafile);
 }
 
@@ -414,7 +413,7 @@ static void execute(enum action_type action)
 {
 	struct trade *trade = (struct trade *)g_list_last(market.trades)->data;
 	double price = trade->price;
-
+	enum order_status status;
 	switch (my_position.mode << 2 | my_position.status << 1 | action) {
 	case 0b000: /*buy-and-sell, complete, buy */
 	case 0b101: /*sell-and-buy, complete, sell */
@@ -422,13 +421,14 @@ static void execute(enum action_type action)
 			printf(" %s: Disallowed.\n", __func__);
 			break;
 		}
-		if (send_order(action) == order_executed) {
+		if ((status = send_order(action)) == order_executed) {
 			my_position.status = incomplete;
 			my_position.price = price;
 			printf(" %s: %s.\n", __func__, action_strings[action]);
 		} else
-			printf(" %s: %s failed.\n", __func__,
-			       action_strings[action]);
+			printf(" %s: %s %s.\n", __func__,
+			       action_strings[action],
+			       status == order_killed ? "killed" : "failed");
 		break;
 	case 0b001: /*buy-and-sell, complete, sell */
 	case 0b010: /*buy-and-sell, incomplete, buy */
@@ -438,13 +438,14 @@ static void execute(enum action_type action)
 		break;
 	case 0b011: /*buy-and-sell, incomplete, sell */
 	case 0b110: /*sell-and-buy, incomplete, buy */
-		if (send_order(action) == 0) {
+		if ((status = send_order(action)) == order_executed) {
 			my_position.status = complete;
 			printf(" %s: %s.\n", __func__,
 			       action_strings[action]);
 		} else
-			printf(" %s: %s failed.\n", __func__,
-			       action_strings[action]);
+			printf(" %s: %s %s.\n", __func__,
+			       action_strings[action],
+			       status == order_killed ? "killed" : "failed");
 	}
 }
 
