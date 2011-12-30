@@ -92,7 +92,6 @@ static void declare(const char *str)
 	FILE *fp = fopen("./beep", "a");
 	fprintf(fp, "%s\n", str);
 	fclose(fp);
-
 }
 
 static const struct stock_info *get_stock_info(const char *id)
@@ -111,12 +110,14 @@ static void free_trade (void *p)
 	g_slice_free(struct trade, p);
 }
 
-static int trade_equal(const struct trade *t1, const struct trade *t2)
+int trade_equal(const struct trade *t1, const struct trade *t2)
 {
-	return 	strcmp(t1->market, t2->market) == 0 &&
+	char p1[20], p2[20];
+	sprintf(p1, "%.*f", trade_constants.dpricepcr, t1->price);
+	sprintf(p2, "%.*f", trade_constants.dpricepcr, t2->price);
+	return strcmp(t1->market, t2->market) == 0 &&
 		strcmp(t1->time, t2->time) == 0 &&
-		t1->price - t2->price > -0.01 &&
-		t1->price - t2->price < 0.01 &&
+		pricecmp(p1, p2) == 0 &&
 		t1->quantity == t2->quantity;
 }
 
@@ -142,7 +143,7 @@ static int log_data(int idx)
 	while (node) {
 		const struct trade *trade =
 			(struct trade *)node->data;
-		if (!check_redundancy || strcmp(trade->time, last.time) >= 0) {
+		if (!check_redundancy || strcmp(trade->time, last.time) > 0) {
 			fprintf(datafile, "%6s\t%8s\t%7.2lf\t%7ld\n",
 				trade->market, trade->time,
 				trade->price, trade->quantity);
@@ -377,7 +378,7 @@ static void prepare_connection(void)
 	}
 }
 
-#if !USE_FAKE_SOURCE
+#if REAL_TRADE || !USE_FAKE_SOURCE
 static CURLcode perform_request(void)
 {
 	CURLcode code;
@@ -395,8 +396,11 @@ static CURLcode perform_request(void)
 	sleep(100 + rand() % 140);
 	prepare_connection();
 	return code != 0 ? code : -EPIPE;
+	return 0;
 }
+#endif
 
+#if !USE_FAKE_SOURCE
 static double get_enter_price(const char *mark)
 {
 	/* "https://www.avanza.se/aza/order/aktie/kopsalj.jsp" */
@@ -407,9 +411,10 @@ static double get_enter_price(const char *mark)
 	char buffer[128], template[64];
 	double x = -1;
 
-	if (datafile == NULL)
+	if (datafile == NULL) {
 		return -1;
-	sprintf(template, "p=([0-9.]+).*%s[.].*$", mark);
+	}
+	sprintf(template, "p=([0-9.]+).*%s[.]$", mark);
 	regex = g_regex_new(template, 0, 0, &error);
 	while (fgets(buffer, sizeof(buffer), datafile)) {
 		gchar *str;
@@ -513,17 +518,12 @@ static void collect_data(void)
 			    "<TD.*>([0-9]+,[0-9]{2})</TD>"
 			    "<TD.*>([0-9]+)</TD></TR>$",
 			    0, 0, &error);
-	/* g_string_printf(gstr, "https://www.avanza.se/aza/" */
-	/* 		"aktieroptioner/kurslistor/" */
-	/* 		"avslut.jsp?password=2Oceans?" */
-	/* 		"&orderbookId=%s&username=sinbaski", */
-	/* 		orderbookId); */
 	update_watcher();
 	prepare_connection();
 
 #if !USE_FAKE_SOURCE
 	while ((hld_qtt = get_hld_qtt()) < 0);
-	if ((my_position.mode == sell_and_buy &&
+	if ((my_position.mode == sell_and_buy && 
 	     hld_qtt < my_position.quantity) ||
 	    (my_position.mode == buy_and_sell &&
 	     hld_qtt > my_position.quantity)) {
@@ -531,8 +531,7 @@ static void collect_data(void)
 		my_position.status = incomplete;
 		x = get_enter_price(my_position.mode == buy_and_sell ?
 				    "BUY" : "SELL");
-		if (x > 0)
-			my_position.price = x;
+		if (x > 0) my_position.price = x;
 	} else
 		my_position.status = complete;
 #endif
@@ -817,9 +816,8 @@ static void signal_handler(int sig, siginfo_t * siginfo, void *context)
 	fflush(stderr);
 }
 
-int main(int argc, const char *argv[])
+int main(int argc, char *argv[])
 {
-	struct trade_position po;
 	struct sigaction act = {
 		.sa_sigaction = signal_handler,
 		.sa_flags = SA_SIGINFO
@@ -831,12 +829,38 @@ int main(int argc, const char *argv[])
 		RLIM_INFINITY, RLIM_INFINITY
 	};
 	int i;
-	if (argc < 4) {
-		fprintf(stderr, "Usage: \n"
-			"%s orderbookId mode status price quantity\n", argv[0]);
-		return 0;
+	int opt;
+	memset(&my_position, 0, sizeof(my_position));
+	while ((opt = getopt(argc, argv, "s:m:p:q:t")) != -1) {
+               switch (opt) {
+               case 's':
+		       sscanf(optarg, "%s", orderbookId);
+		       break;
+	       case 'm':
+		       sscanf(optarg, "%d", (int *)&my_position.mode);
+		       break;
+               case 'p':
+		       sscanf(optarg, "%lf", &my_position.price);
+                   break;
+	       case 'q':
+		       sscanf(optarg, "%ld", &my_position.quantity);
+		       break;
+	       case 't':
+		       my_position.trapped = 1;
+		       break;
+               default: /* '?' */
+                   fprintf(stderr, "Usage: %s -s stock -m mode "
+			   "-q quantity [-p enter_price]\n",
+                           argv[0]);
+                   exit(EXIT_FAILURE);
+               }
 	}
-	strcpy(orderbookId, argv[1]);
+	if (strlen(orderbookId) == 0 || my_position.quantity == 0) {
+                   fprintf(stderr, "Usage: %s [-s stock] [-m] mode "
+			   "[-p] enter_price -q quantity\n",
+                           argv[0]);
+		exit(EXIT_FAILURE);
+	}
 #if DAEMONIZE
 	daemonize();
 #endif
@@ -845,11 +869,6 @@ int main(int argc, const char *argv[])
 	freopen(get_filename("logs", ".log"), "a", stderr);
 
 	setrlimit(RLIMIT_CORE, &rlim);
-
-	memset(&po, 0, sizeof(po));
-	sscanf(argv[2], "%d", (int *)&po.mode);
-	sscanf(argv[3], "%ld", &po.quantity);
-	set_position(&po);
 
 	for (i = 0; i < sizeof(cared_signals)/sizeof(cared_signals[0]); i++)
 		sigaction(cared_signals[i], &act, NULL);

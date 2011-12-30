@@ -17,7 +17,7 @@
 		sprintf(str, "%.*f", trade_constants.dpricepcr, price); \
 	})
 
-const double fee = 198;
+const double feerate = 0.08E-2;
 struct market market;
 struct trade_position my_position;
 
@@ -38,13 +38,13 @@ struct indicators indicators = {
 			.probdist = NULL,
 			.period = 40 * 60,
 		},
-		{
-			.available = 0,
-			.probdist = NULL,
-			.period = 60 * 60,
-		},
+		/* { */
+		/* 	.available = 0, */
+		/* 	.probdist = NULL, */
+		/* 	.period = 60 * 60, */
+		/* }, */
 	},
-	.tolerated_loss = 250,
+	.tolerated_loss = 600,
 	.allow_new_positions = 1,
 	.ret = 0,
 	.avg_ret = 0,
@@ -60,8 +60,8 @@ struct {
 	const float min_open_profit;
 	const float min_close_profit;
 } policy = {
-	.min_open_profit = 100,
-	.min_close_profit = 100
+	.min_open_profit = 140,
+	.min_close_profit = 140
 };
 
 int inline indicators_initialized(void)
@@ -170,15 +170,6 @@ static struct price_interval *new_price_interval(const char *price, long n)
 	return x;
 }
 
-static int pricecmp(const char *pstr1, const char *pstr2)
-{
-	int l1, l2;
-	if ((l1 = strlen(pstr1)) != (l2 = strlen(pstr2)))
-		return l1 - l2;
-	else
-		return strcmp(pstr1, pstr2);
-}
-
 static void update_probdist(int idx, const struct trade *trade, int plus)
 /* static void update_probdist(GList **list, const struct trade *trade, int plus) */
 {
@@ -186,7 +177,7 @@ static void update_probdist(int idx, const struct trade *trade, int plus)
 	char pstr[20];
 	GList **list = &indicators.timely[idx].probdist;
 	static GList *last_match[ARRAY_SIZE(indicators.timely)] = {
-		NULL, NULL, NULL
+		NULL, NULL
 	};
 
 	assert(idx >= 0 && idx < ARRAY_SIZE(indicators.timely));
@@ -199,8 +190,10 @@ static void update_probdist(int idx, const struct trade *trade, int plus)
 		struct price_interval *itv2, *itv3;
 		int cmp2;
 		if (cmp < 0) {
-			if (node == *list)
+			if (node == *list) {
+				node2 = node;
 				goto label1;
+			}
 			itv2 = (struct price_interval *)node->prev->data;
 			cmp2 = pricecmp(pstr, itv2->price);
 			if (cmp2 > 0) {
@@ -213,25 +206,29 @@ static void update_probdist(int idx, const struct trade *trade, int plus)
 				itv2->n += trade->quantity;
 				last_match[idx] = node->prev;
 				return;
-			}
+			} else
+				node2 = node->prev;
 		label1:
-			node2 = node;
-			node = node->prev;
+			node = node2->prev;
 		} else if (cmp == 0) {
-			if (plus)
+			if (plus) {
 				itv->n += trade->quantity;
-			else {
+				last_match[idx] = node;
+			} else {
 				itv->n -= trade->quantity;
 				if (itv->n == 0) {
+					last_match[idx] = node->next ?
+						node->next : node->prev;
 					*list = g_list_remove_link(*list, node);
 					g_list_free_full(
 						node, free_price_interval);
-				}
+				} else
+					last_match[idx] = node;
 			}
-			last_match[idx] = node;
 			return;
 		} else if (cmp > 0) {
 			if (node->next == NULL) {
+				node2 = node;
 				goto label2;
 			}
 			itv2 = (struct price_interval *)node->next->data;
@@ -247,10 +244,10 @@ static void update_probdist(int idx, const struct trade *trade, int plus)
 				itv2->n += trade->quantity;
 				last_match[idx] = node->next;
 				return;
-			}
+			} else
+				node2 = node->next;
 		label2:
-			node2 = node;
-			node = node->next;
+			node = node2->next;
 		}
 	}
 	assert(plus);
@@ -406,7 +403,9 @@ static double cal_profit(double price)
 		diff = price - my_position.price;
 		break;
 	}
-	return diff * my_position.quantity - fee;
+	/* return (diff - price * feerate) * my_position.quantity; */
+	return (diff - (price + my_position.price) * feerate) *
+		my_position.quantity;
 }
 
 static void execute(enum action_type action)
@@ -414,6 +413,12 @@ static void execute(enum action_type action)
 	struct trade *trade = (struct trade *)g_list_last(market.trades)->data;
 	double price = trade->price;
 	enum order_status status;
+	int trials = 3;
+	const int limtime = 20, delay = 5;
+	time_t t1, t2;
+	time(&t1);
+
+	printf(" %s: ", __func__);
 	switch (my_position.mode << 2 | my_position.status << 1 | action) {
 	case 0b000: /*buy-and-sell, complete, buy */
 	case 0b101: /*sell-and-buy, complete, sell */
@@ -421,14 +426,21 @@ static void execute(enum action_type action)
 			printf(" %s: Disallowed.\n", __func__);
 			break;
 		}
-		if ((status = send_order(action)) == order_executed) {
-			my_position.status = incomplete;
-			my_position.price = price;
-			printf(" %s: %s.\n", __func__, action_strings[action]);
-		} else
-			printf(" %s: %s %s.\n", __func__,
-			       action_strings[action],
-			       status == order_killed ? "killed" : "failed");
+		do {
+			if ((status = send_order(action)) == order_executed) {
+				my_position.status = incomplete;
+				my_position.price = price;
+			} else {
+				time(&t2);
+				if (--trials) {
+					printf("%d ", trials);
+					if (t2 + delay - t1 < limtime)
+						sleep(delay);
+					else
+						trials = 0;
+				}
+			}
+		} while (status != order_executed && trials);
 		break;
 	case 0b001: /*buy-and-sell, complete, sell */
 	case 0b010: /*buy-and-sell, incomplete, buy */
@@ -438,15 +450,29 @@ static void execute(enum action_type action)
 		break;
 	case 0b011: /*buy-and-sell, incomplete, sell */
 	case 0b110: /*sell-and-buy, incomplete, buy */
-		if ((status = send_order(action)) == order_executed) {
-			my_position.status = complete;
-			printf(" %s: %s.\n", __func__,
-			       action_strings[action]);
-		} else
-			printf(" %s: %s %s.\n", __func__,
-			       action_strings[action],
-			       status == order_killed ? "killed" : "failed");
+		do {
+			if ((status = send_order(action)) == order_executed) {
+				my_position.status = complete;
+				my_position.trapped = 0;
+			} else {
+				time(&t2);
+				if (--trials) {
+					printf("%d ", trials);
+					if (t2 + delay - t1 < limtime)
+						sleep(delay);
+					else
+						trials = 0;
+				}
+			}
+		} while (status != order_executed && trials);
 	}
+	if (status == order_executed)
+		printf(" %s.\n", action_strings[action]);
+	else {
+		printf(" %s %s.\n", action_strings[action],
+		       status == order_killed ? "killed" : "failed");
+	}
+	
 }
 
 /*
@@ -492,14 +518,17 @@ static int is_trapped(void)
 		lower_than = -1,
 		higher_than = 1
 	};
+	const int idx = ARRAY_SIZE(indicators.timely) - 1;
 
+	if (my_position.trapped)
+		return 1;
 	if (my_position.status != incomplete ||
-	    !indicators.timely[2].available)
+	    !indicators.timely[idx].available)
 		return 0;
 	if (my_position.mode == buy_and_sell)
-		prob = get_price_prob(higher_than, my_position.price, 2);
+		prob = get_price_prob(higher_than, my_position.price, idx);
 	else
-		prob = get_price_prob(lower_than, my_position.price, 2);
+		prob = get_price_prob(lower_than, my_position.price, idx);
 	return prob <= 0.32;
 }
 
@@ -509,7 +538,10 @@ static enum action_type price_comparer(double latest, int idx)
 	struct timely_indicator *ind = indicators.timely + idx;
 	double profit, prob, mindiff;
 	double ret = get_return();
-	const double open_prob = 0.65, close_prob = 0.65;
+	const double open_prob[ARRAY_SIZE(indicators.timely)] = {
+		0.65, 0.70
+	};
+	const double close_prob = 0.65;
 
 	enum {
 		lower_than = -1,
@@ -519,22 +551,30 @@ static enum action_type price_comparer(double latest, int idx)
 	if (!ind->available)
 		return action_observe;
 
-	mindiff = (policy.min_open_profit + fee) / my_position.quantity;
+	/* mindiff = (policy.min_open_profit + fee) / my_position.quantity; */
+	mindiff  = policy.min_open_profit +
+		2 * latest * feerate * my_position.quantity;
+	mindiff /= my_position.quantity;
+	mindiff /= my_position.mode == buy_and_sell ?
+		(1 - feerate) : (1 + feerate);
 	switch (my_position.mode << 1 | my_position.status) {
 	case 0b00:
 		prob = get_price_prob(
 			higher_than, latest + mindiff, idx);
-		if (prob >= open_prob && ret >= 0.0005)
+		assert(prob >= 0 && prob < 1);
+		if (prob >= open_prob[idx] && ret >= 0.0005)
 			action = action_buy;
 		break;
 	case 0b10:
 		prob = get_price_prob(
 			lower_than, latest - mindiff, idx);
-		if (prob >= open_prob && ret <= -0.0005)
+		assert(prob >= 0 && prob < 1);
+		if (prob >= open_prob[idx] && ret <= -0.0005)
 			action = action_sell;
 		break;
 	case 0b01:
 		prob = get_price_prob(higher_than, latest, idx);
+		assert(prob >= 0 && prob < 1);
 		profit = cal_profit(latest);
 		if (ret > 0.0005 || (prob > close_prob && ret > -0.0003))
 			action = action_observe;
@@ -543,6 +583,7 @@ static enum action_type price_comparer(double latest, int idx)
 		break;
 	case 0b11:
 		prob = get_price_prob(lower_than, latest, idx);
+		assert(prob >= 0 && prob < 1);
 		profit = cal_profit(latest);
 		if (ret < -0.0005 || (prob > close_prob && ret < 0.0003))
 			action = action_observe;
@@ -582,7 +623,7 @@ void analyze()
 	case incomplete: {
 		double profit = cal_profit(latest);
 		int trapped;
-		printf("\tprof=%.2f, ", profit);
+		printf("prof=%.2f, ", profit);
 		if (profit > 0 && action != action_observe)
 			break;
 		/* early-morning trading */

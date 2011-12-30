@@ -12,7 +12,7 @@ srcs := $(wildcard $(srcdir)/*.c)
 objs := $(notdir $(patsubst %.c, %.o, $(srcs)))
 objs := $(addprefix $(objdir)/, $(objs))
 
-CFLAGS := -c -Wall -Werror -Iinclude -g3 $(debug) \
+CFLAGS := -c -Wall -Werror -Iinclude -g3 \
 $(shell pkg-config --cflags glib-2.0) \
 -DUSE_FAKE_SOURCE=$(USE_FAKE_SOURCE) \
 -DDAEMONIZE=$(DAEMONIZE) \

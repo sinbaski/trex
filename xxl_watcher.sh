@@ -12,16 +12,19 @@ while test 1; do
 
     file="watcher-$stock"
     if [ ! -f $file ]; then
+	echo -n "[`date +%H:%M:%S`] " >> $log
 	echo "xxl_watcher: starting..." >> $log
 	./intraday.sh start
-    elif [ -n "`ps -C intraday -o cmd= | grep $stock`" ]; then
+    elif ps -C intraday -o cmd= | grep -q $stock; then
 	x="`stat -c %Y $file`"
 	y="`date +%s`"
 	if [ $(($y - $x)) -gt 310 ]; then
+	    echo -n "[`date +%H:%M:%S`] " >> $log
 	    echo "xxl_watcher: restarting..." >> $log
 	    ./intraday.sh restart
 	fi
     else
+	echo -n "[`date +%H:%M:%S`] " >> $log
 	echo "xxl_watcher: starting..." >> $log
 	./intraday.sh start
     fi

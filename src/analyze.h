@@ -51,7 +51,7 @@ struct indicators {
 	double avg_ret;
 	double tolerated_loss;
 	unsigned int allow_new_positions:1;
-	struct timely_indicator timely[3];
+	struct timely_indicator timely[2];
 };
 
 struct trade_const {
@@ -89,6 +89,7 @@ struct trade_position {
 	double price;
 	/* The number of shares we trade */
 	long quantity;
+	unsigned int trapped;
 };
 
 

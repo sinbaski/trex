@@ -21,6 +21,15 @@ long str2long(const char *str, int *dignum)
 	return ret;
 }
 
+int pricecmp(const char *pstr1, const char *pstr2)
+{
+	int l1, l2;
+	if ((l1 = strlen(pstr1)) != (l2 = strlen(pstr2)))
+		return l1 - l2;
+	else
+		return strcmp(pstr1, pstr2);
+}
+
 GString *round_price(double price, const char *ticksize,
 		     enum rounding_scheme scheme)
 {

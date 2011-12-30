@@ -5,6 +5,7 @@
 dir=/home/xxie/work/avanza/data_extract/intraday
 mode=1
 while test 1; do
+    str=""
     while read x && test -n "$x"; do
 	# The order to %s %s at %s is %s.
 	if [ `echo "$x" | wc -w` -ne 9 ]; then
@@ -17,8 +18,9 @@ while test 1; do
 	    name=`echo "$x" | cut -d " " -f 5`;
 	    price=`echo "$x" | cut -d " " -f 7`;
 	fi
-	echo "Ladies and gentlemen, may I have your attention? " \
-	    "$x" | festival --tts
+	str="$str $x"
     done < $dir/beep
+    echo "Ladies and gentlemen, may I have your attention? " \
+	"$str" | festival --tts &
 done
 
