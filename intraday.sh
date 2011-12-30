@@ -4,15 +4,38 @@ stock=183828
 
 # 0: buy-and-sell
 # 1: sell-and-buy
-mode=1
+mode=0
+
+#entering price
+price="88.50"
 
 # entering quantity
-quantity=830
+quantity=730
+
+trapped=0
 
 wd=/home/xxie/work/avanza/data_extract/intraday
 
 function start_trading {
-    ./intraday $stock $mode $quantity
+    if [ "$trapped" == "0" ]; then
+	./intraday -s $stock -m $mode -q $quantity -p $price
+    else
+	./intraday -s $stock -m $mode -q $quantity -p $price -t
+    fi
+}
+
+function stop_trading {
+    pid=`ps -C intraday -o pid=,cmd= | grep $stock | grep -o '^ *[0-9]\+'`
+    if [ -z "$pid" ]; then
+	echo "None is running."
+	return 0
+    fi
+    kill $pid
+    # wait until the process is killed
+    while ps -C intraday -o pid= | grep -q $pid; do
+	sleep 3
+    done
+    return 0
 }
 
 if [ "$wd" != `pwd` ]; then cd $wd; fi
@@ -34,18 +57,24 @@ shift
 
 case $command in
 start)
-	if [ -z "`ps -C alarm.sh -o pid=`" ]; then
+	if ps -C intraday -o cmd= | grep -q $stock; then
+	    echo "Already running."
+	    exit 0
+	fi
+	if [ `pgrep -c alarm.sh` -eq 0 ]; then
 	    ./alarm.sh &
 	fi
 	start_trading
 	;;
 stop)
-	killall intraday &> /tmp/null
-	killall alarm.sh &> /tmp/null
+	stop_trading
+	if [ `pgrep -c intraday` -eq 0 ]; then
+	    killall alarm.sh &> /tmp/null
+	fi
 	;;
 restart)
-	killall intraday &> /tmp/null
-	if [ -z "`ps -C alarm.sh -o pid=`" ]; then
+	stop_trading
+	if [ `pgrep -c alarm.sh` -eq 0 ]; then
 	    ./alarm.sh &
 	fi
 	start_trading
