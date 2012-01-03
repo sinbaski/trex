@@ -14,12 +14,13 @@
 #include "analyze.h"
 #include "utilities.h"
 
-#define MIN_NEW_TRADES 8
+#define MIN_NEW_TRADES 10
 #define TRANSFER_TIMEOUT 60 * 5 /* 5 minutes */
 #define WORKDIR "/home/xxie/work/avanza/data_extract/intraday"
 #define COOKIE_FILE "./cookies.txt"
 #define DATA_UPDATE_INTERVAL 36
 
+struct market market;
 
 enum status {
 	registering,
@@ -89,9 +90,10 @@ static void daemonize(void)
 
 static void declare(const char *str)
 {
-	FILE *fp = fopen("./beep", "a");
-	fprintf(fp, "%s\n", str);
-	fclose(fp);
+	/* FILE *fp = fopen("./beep", "a"); */
+	/* fprintf(fp, "%s\n", str); */
+	/* fclose(fp); */
+	return;
 }
 
 static const struct stock_info *get_stock_info(const char *id)
@@ -103,6 +105,21 @@ static const struct stock_info *get_stock_info(const char *id)
 		}
 	}
 	return NULL;
+}
+
+time_t get_trade(FILE *datafile, long n, struct trade *trade1)
+{
+       long offset = ftell(datafile);
+       struct trade trade2;
+       struct trade *trade = trade1 ? trade1 : &trade2;
+
+       assert(n >= 0 && n < fnum_of_line(datafile));
+       fseek(datafile, n * DATA_ROW_WIDTH, SEEK_SET);
+       fscanf(datafile, "%s\t%s\t%lf\t%ld",
+              trade->market, trade->time, &trade->price,
+              &trade->quantity);
+       fseek(datafile, offset, SEEK_SET);
+       return parse_time(trade->time);
 }
 
 static void free_trade (void *p)
@@ -258,6 +275,9 @@ static void refine_data(FILE *fp, const GRegex *regex)
 		before, between, within, after
 	} position = before;
 	int gp = g_list_length(market.trades);
+	FILE *datafile;
+	int l;
+
 	while (fgets(buffer, sizeof(buffer), fp) &&
 		position != after) {
 		int len = strlen(buffer);
@@ -304,11 +324,16 @@ static void refine_data(FILE *fp, const GRegex *regex)
 end:
 	if (market.new_trades == 0 || log_data(gp) == 0)
 		return;
-	if (g_list_length(market.trades) >= MIN_ANALYSIS_SIZE &&
-	    (market.new_trades >= MIN_NEW_TRADES || !indicators_initialized())) {
+	datafile = fopen(get_filename("records", ".dat"), "r");
+	l = fnum_of_line(datafile);
+	fclose(datafile);
+	if (l > MIN_ANALYSIS_SIZE && market.new_trades >= MIN_NEW_TRADES) {
 		analyze();
 		market.new_trades = 0;
 	}
+	l = g_list_length(market.trades) - MAX_TRADES_COUNT;
+	if (l > 0)
+		discard_old_records(l);
 }
 
 size_t store_cookie(void *ptr, size_t size, size_t nmemb, void *userdata)
@@ -606,7 +631,6 @@ static void collect_data(void)
 	}
 	curl_easy_cleanup(conn.handle);
 	curl_global_cleanup();
-	analyzer_cleanup();
 	g_list_free_full(market.trades, free_trade);
 	g_regex_unref(regex);
 	g_string_free(gstr, TRUE);

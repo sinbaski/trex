@@ -78,3 +78,15 @@ GString *make_valid_price(double price)
 	return round_price(price, ticksize, round_nearest);
 }
 
+time_t parse_time(const char *timestring)
+{
+       struct tm *tm;
+       time_t x;
+
+       time(&x);
+       tm = localtime(&x);
+       sscanf(timestring, "%d:%d:%d", &tm->tm_hour, &tm->tm_min, &tm->tm_sec);
+       x = mktime(tm);
+       return x;
+}
+

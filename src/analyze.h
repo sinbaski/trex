@@ -5,7 +5,7 @@
 
 #define ORDER_DEPTH 5
 /* Most likely 80 */
-#define MIN_ANALYSIS_SIZE 80
+#define MIN_ANALYSIS_SIZE 1000
 #define MAX_TRADES_COUNT 80
 
 #define DATA_ROW_WIDTH 32
@@ -46,12 +46,8 @@ struct timely_indicator {
 };
 
 struct indicators {
-	int initialized;
-	double ret;
-	double avg_ret;
 	double tolerated_loss;
 	unsigned int allow_new_positions:1;
-	struct timely_indicator timely[2];
 };
 
 struct trade_const {
@@ -73,7 +69,7 @@ enum trade_status {
 enum action_type {
 	action_buy = 0,
 	action_sell,
-	action_observe,
+	action_none,
 	number_of_action_types,
 };
 

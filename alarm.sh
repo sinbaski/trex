@@ -20,7 +20,7 @@ while test 1; do
 	fi
 	str="$str $x"
     done < $dir/beep
-    echo "Ladies and gentlemen, may I have your attention? " \
-	"$str" | festival --tts &
+    # echo "Ladies and gentlemen, may I have your attention? " \
+    # 	"$str" | festival --tts &
 done
 

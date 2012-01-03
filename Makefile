@@ -1,12 +1,11 @@
 CC := gcc
-
 srcdir := src
 objdir := obj
 
-USE_FAKE_SOURCE := 0
-DAEMONIZE := 1
+USE_FAKE_SOURCE := 1
+DAEMONIZE := 0
 REAL_TRADE := 0
-CURFEW_AFT_5 = 1
+CURFEW_AFT_5 = 0
 
 srcs := $(wildcard $(srcdir)/*.c)
 objs := $(notdir $(patsubst %.c, %.o, $(srcs)))
@@ -14,12 +13,15 @@ objs := $(addprefix $(objdir)/, $(objs))
 
 CFLAGS := -c -Wall -Werror -Iinclude -g3 \
 $(shell pkg-config --cflags glib-2.0) \
+-I$(MATLAB_ROOT)/extern/include \
 -DUSE_FAKE_SOURCE=$(USE_FAKE_SOURCE) \
 -DDAEMONIZE=$(DAEMONIZE) \
 -DREAL_TRADE=$(REAL_TRADE) \
 -DCURFEW_AFT_5=$(CURFEW_AFT_5)
 
-LDFLAGS := -lcurl -Wl,-Bsymbolic-functions $(shell pkg-config --libs glib-2.0) -lm
+LDFLAGS := -lcurl -Wl,-Bsymbolic-functions \
+	$(shell pkg-config --libs glib-2.0) -lm \
+	-L$(MATLAB_ROOT)/bin/glnxa64 -leng -lmx
 
 $(objs): $(objdir)/%.o: $(srcdir)/%.c
 	@if [ ! -e $(objdir) ]; then mkdir $(objdir); fi
