@@ -8,4 +8,4 @@ if ~xxl_prefitted
                      'R', 1, 'M', 1);
 end
 
-specx = analyze('183828', specx, xxl_prefitted);
+specx = analyze('183828', specx, xxl_prefitted, '2011-11-14', 0);

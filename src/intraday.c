@@ -50,6 +50,8 @@ struct stock_info {
 };
 
 char orderbookId[20];
+/* A date string indicating the data used for calibration */
+char calibration[20];
 volatile enum status my_status;
 
 #if DAEMONIZE
@@ -275,7 +277,6 @@ static void refine_data(FILE *fp, const GRegex *regex)
 		before, between, within, after
 	} position = before;
 	int gp = g_list_length(market.trades);
-	FILE *datafile;
 	int l;
 
 	while (fgets(buffer, sizeof(buffer), fp) &&
@@ -324,10 +325,7 @@ static void refine_data(FILE *fp, const GRegex *regex)
 end:
 	if (market.new_trades == 0 || log_data(gp) == 0)
 		return;
-	datafile = fopen(get_filename("records", ".dat"), "r");
-	l = fnum_of_line(datafile);
-	fclose(datafile);
-	if (l > MIN_ANALYSIS_SIZE && market.new_trades >= MIN_NEW_TRADES) {
+	if (market.new_trades >= MIN_NEW_TRADES) {
 		analyze();
 		market.new_trades = 0;
 	}
@@ -855,7 +853,7 @@ int main(int argc, char *argv[])
 	int i;
 	int opt;
 	memset(&my_position, 0, sizeof(my_position));
-	while ((opt = getopt(argc, argv, "s:m:p:q:t")) != -1) {
+	while ((opt = getopt(argc, argv, "s:m:p:q:t:c:")) != -1) {
                switch (opt) {
                case 's':
 		       sscanf(optarg, "%s", orderbookId);
@@ -865,12 +863,15 @@ int main(int argc, char *argv[])
 		       break;
                case 'p':
 		       sscanf(optarg, "%lf", &my_position.price);
-                   break;
+		       break;
 	       case 'q':
 		       sscanf(optarg, "%ld", &my_position.quantity);
 		       break;
 	       case 't':
 		       my_position.trapped = 1;
+		       break;
+	       case 'c':
+		       sscanf(optarg, "%s", calibration);
 		       break;
                default: /* '?' */
                    fprintf(stderr, "Usage: %s -s stock -m mode "

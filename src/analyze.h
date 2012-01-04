@@ -5,7 +5,7 @@
 
 #define ORDER_DEPTH 5
 /* Most likely 80 */
-#define MIN_ANALYSIS_SIZE 1000
+#define MIN_ANALYSIS_SIZE 400
 #define MAX_TRADES_COUNT 80
 
 #define DATA_ROW_WIDTH 32
@@ -92,6 +92,7 @@ struct trade_position {
 extern struct trade_position my_position;
 extern struct market market;
 extern char orderbookId[20];
+extern char calibration[20];
 extern struct trade_const trade_constants;
 
 int inline indicators_initialized(void);

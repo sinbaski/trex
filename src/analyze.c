@@ -99,8 +99,8 @@ void analyze(void)
 	static int count = 0;
 	int allow_new_positions;
 	char buffer[500];
-	FILE *fp;
-	int fit;
+	FILE *fp, *datafile;
+	int fit, l;
 #if CURFEW_AFT_5
 	allow_new_positions = strcmp(get_timestring(), "16:30:00") < 0;
 #else
@@ -121,19 +121,35 @@ void analyze(void)
 		);
 	fclose(fp);
 
-	sprintf(buffer, "spec%s", orderbookId);
 	if (!count) {
 		sprintf(buffer, "spec%s = garchset('Distribution', 'T',"
 			"'Display', 'off','VarianceModel', 'GJR',"
 			"'P', 1, 'Q', 1, 'R', 1, 'M', 1);",
 			orderbookId);
 		engEvalString(mateng, buffer);
+
+		sprintf(buffer, "spec%s = analyze('%s', spec%s, 0, '%s', 0);",
+			orderbookId, orderbookId, orderbookId, calibration);
+		engEvalString(mateng, buffer);
+		count++;
+		return;
+
 	}
-
-	sprintf(buffer, "spec%s = analyze('%s', spec%s, %d);",
-		orderbookId, orderbookId, orderbookId, count++);
+	datafile = fopen(get_filename("records", ".dat"), "r");
+	l = fnum_of_line(datafile);
+	fclose(datafile);
+	if (l < MIN_ANALYSIS_SIZE) {
+		sprintf(buffer, "spec%s = analyze('%s', spec%s, 1, "
+			"'%s', 0);", orderbookId, orderbookId,
+			orderbookId, calibration);
+		engEvalString(mateng, buffer);
+		return;
+	}
+	sprintf(buffer, "spec%s = analyze('%s', spec%s, 1, "
+		"'%s', 1);", orderbookId, orderbookId,
+		orderbookId, calibration);
+	
 	engEvalString(mateng, buffer);
-
 	sprintf(buffer, "rendezvous/%s.txt", orderbookId);
 	fp = fopen(buffer, "r");
 	fscanf(fp, "%d %d\n", &fit, (int *)&action);
