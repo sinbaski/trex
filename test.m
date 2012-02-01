@@ -8,4 +8,5 @@ if ~xxl_prefitted
                      'R', 1, 'M', 1);
 end
 
-specx = analyze('183828', specx, xxl_prefitted, '2011-11-14', 0);
+[specx, action, retcode, msg] = ...
+    analyze('183828', 0, 0, double(0), 730, specx, xxl_prefitted, '2012-01-09', 1);

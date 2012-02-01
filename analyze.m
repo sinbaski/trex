@@ -1,14 +1,22 @@
-function newspec = analyze(stock, spec, prefitted, calibration, ...
-                           simulate)
-% 1000 trades in total. approx. 1 hour
-numPaths = 1000;
-
-windowsize = 10;
-windownum = 100;
-
+function [newspec, action, retcode, msg] = ...
+        analyze(stock, mymode, mystatus, myprice, myquantity,...
+                spec, prefitted, calibration, simulate)
 BUY = 0;
 SELL = 1;
 NONE = 2;
+
+if strcmp(calibration, 'no')
+    retcode = int8(-2);
+    action = int8(NONE);
+    msg = sprintf('No calibration data.');
+    newspec = spec;
+    return;
+end
+
+numPaths = 2000;
+
+windowsize = 25;
+windownum = 16;
 
 policy = struct('min_open_profit', 140, 'min_close_profit', 140);
 
@@ -38,15 +46,6 @@ T(n1 + 1 : end) = C{1};
 price(n1 + 1 : end, 1) = C{2};
 quantity(n1 + 1 : end, 1) = C{3};
 
-fd = fopen(strcat('positions/', stock, '-', ...
-                  datestr(today, 'yyyy-mm-dd'), '.pos'), 'r');
-C = textscan(fd, '%d %d %f %d');
-mymode = C{1};
-mystatus = C{2};
-myprice = C{3};
-myquantity = C{4};
-fclose(fd);
-
 fclose(calfile);
 fclose(datfile);
 
@@ -60,21 +59,30 @@ RT = price2ret(P);
     xxl_fit(spec, RT, prefitted);
 fprintf(2, 'xxl_fit has returned. %s.\n', summary1.converge);
 if isempty(strfind(summary1.converge, 'converged'))
-    fprintf(2, 'The model does not converge.\n');
-    fprintf(fd, '%d %d\n', 0, 0);
-    fclose(fd);
+    action = int8(NONE);
+    retcode = int8(-1);
+    msg = sprintf('The model does not converge.\n');
     return;
 end
 
 if ~simulate
-    return
+    action = int8(NONE);
+    retcode = int8(0);
+    msg = sprintf('No simulation.\n');
+    return;
 end
 [sim_inn1, sim_sig1, sim_rt1] = garchsim(newspec, windownum, numPaths, ...
                                          [], [], [], ...
                                          residuals1, sigmas1, RT);
 sim_p1 = ret2price(sim_rt1, P(end));
-sim_p1 = sim_p1(2:end, :);
+% sim_p1 = sim_p1(2:end, :);
 % Calculate the minimum price difference
+
+clear prefitted errors1 LLF1 residuals1 sigmas1 summary1 P RT
+
+avg = mean(sim_p1')';
+[cmax, imax] = max(avg);
+[cmin, imin] = min(avg);
 
 if mystatus == 0
     mindiff  = policy.min_open_profit + ...
@@ -88,65 +96,45 @@ if mystatus == 0
     end
 end
 
-% rt = mean(RT(end - 30 + 1 : end));
-action = NONE;
-fd = fopen(strcat('rendezvous/', stock, '.txt'), 'w');
+retcode = int8(0);
+action = int8(NONE);
+
+r = double(2.5) / double(80);
+if abs(price2ret([price(end); cmax])) > r || ...
+        abs(price2ret([price(end); cmin])) > r
+    retcode = int8(1);
+    msg = sprintf('[%s] The simulation result is insane', char(T(end)));
+    return;
+end
+clear r
+
 if mymode == 0 && mystatus == 0
-    cond = @(x) x > price(end) + mindiff;
-    prob = xxl_prob(sim_p1, cond);
-    if prob > 0.7
-        action = BUY;
-    else
-        action = NONE;
+    if imin == 1 && cmax > avg(1) + mindiff    
+        action = int8(BUY);
     end
-    fprintf(fd, '%d %d\n', 1, action);
-    fprintf(fd, '[%s] price=%f + %f; prob = %f',...
-            char(T(end)), price(end), mindiff, prob);
+    msg = sprintf('[%s] price=%f + %f; imin = %d; imax = %d; cmax = %f',...
+                  char(T(end)), price(end), ...
+                  mindiff, imin, imax, cmax);
 elseif mymode == 0 && mystatus == 1
     profit = xxl_profit(mymode, myprice, myquantity,...
                         price(end), feerate);
-    if profit > 0
-        threshold = 0.55;
-    else
-        threshold = 0.45;
+    if imax == 1 && (profit > 0 || price2ret([myprice; cmin]) < -0.5/80)
+        action = int8(SELL);
     end
-    cond = @(x) x > price(end);
-    prob = xxl_prob(sim_p1, cond);
-    if prob > threshold
-        action = NONE;
-    else
-        action = SELL;
-    end
-    fprintf(fd, '%d %d\n', 1, action);
-    fprintf(fd, '[%s] price=%f; profit = %f; prob = %f',...
-            char(T(end)), price(end), profit, prob);
+    msg = sprintf('[%s] price=%f; profit = %f; imax = %d',...
+                  char(T(end)), price(end), profit, imax);
 elseif mymode == 1 && mystatus == 0
-    cond = @(x) x < price(end) - mindiff;
-    prob = xxl_prob(sim_p1, cond);
-    if prob > 0.7
-        action = SELL;
-    else
-        action = NONE;
+    if imax == 1 && cmin < avg(1) - mindiff    
+        action = int8(SELL);
     end
-    fprintf(fd, '%d %d\n', 1, action);
-    fprintf(fd, '[%s] price=%f - %f; prob = %f',...
-            char(T(end)), price(end), mindiff, prob);
+     msg = sprintf('[%s] price=%f - %f; imin = %d; imax = %d; cmin = %f',...
+                   char(T(end)), price(end), mindiff, imin, imax, cmin);
 elseif mymode == 1 && mystatus == 1
-    profit = xxl_profit(mymode, myprice, myquantity, price(end), feerate);
-    if profit > 0
-        threshold = 0.55;
-    else
-        threshold = 0.45;
+    profit = xxl_profit(mymode, myprice, myquantity,...
+                        price(end), feerate);
+    if imin == 1 && (profit > 0 || price2ret([myprice; cmax]) > 0.5/80)
+        action = int8(BUY);
     end
-    cond = @(x) x < price(end);
-    prob = xxl_prob(sim_p1, cond);
-    if prob > threshold
-        action = NONE;
-    else
-        action = BUY;
-    end
-    fprintf(fd, '%d %d\n', 1, action);
-    fprintf(fd, '[%s] price=%f; profit = %f; prob = %f',...
-            char(T(end)), price(end), profit, prob);
+    msg = sprintf('[%s] price=%f; profit = %f; imin = %d',...
+                  char(T(end)), price(end), profit, imin);
 end
-fclose(fd);

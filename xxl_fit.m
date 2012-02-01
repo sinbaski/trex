@@ -18,16 +18,16 @@ sigmas = NaN(size(returns, 1), 1);
 
 % find the simpliest fitting model.
 for a = 4:10
-    for b = 1:3
-        for c = b:3
+    for b = a:10
+        for c = 1:3
             if modelFitted
                 break;
             end
             spec = garchset('Distribution' , 'T',...
                             'Display', 'off', ...
                             'VarianceModel', 'GJR',...
-                            'P', b, 'Q', c, ...
-                            'R', a, 'M', a);
+                            'P', c, 'Q', c, ...
+                            'R', b, 'M', a);
             [spec, errors, LLF, residuals, sigmas, summary] = ...
                 garchfit(spec, returns);
             fprintf(2, '%u %u %u ', a, b, c);
