@@ -21,6 +21,7 @@
 #define DATA_UPDATE_INTERVAL 36
 
 struct market market;
+enum trade_status enter_status;
 
 enum status {
 	registering,
@@ -47,6 +48,21 @@ struct stock_info {
 		"183828",
 		"5564"
 	},
+	{
+		"Alliance Oil Company SDB",
+		"217041",
+		"81447"
+	},
+	{
+		"Nordea Bank",
+		"183830",
+		"5249"
+	},
+	{
+		"Ericsson B",
+		"181870",
+		"5240"
+	}
 };
 
 char orderbookId[20];
@@ -175,6 +191,7 @@ static int log_data(int idx)
 	return n;
 }
 
+#if !USE_FAKE_SOURCE
 static void refresh_conn(void)
 {
 	curl_easy_reset(conn.handle);
@@ -185,44 +202,6 @@ static void refresh_conn(void)
 			 "Windows NT 6.1; WOW64; Trident/5.0)");
 	if (g_atomic_int_get(&my_status) != registering)
 		curl_easy_setopt(conn.handle, CURLOPT_COOKIEFILE, COOKIE_FILE);
-}
-
-#if 0
-static void write_out_cookies(void)
-{
-	FILE *fp = fopen("cookie_dump.txt", "w");
-	struct curl_slist *list, *node;
-
-	curl_easy_getinfo(conn.handle, CURLINFO_COOKIELIST, &list);
-	fprintf(fp, "Known cookies:\n");
-	for (node = list; node != NULL; node = node->next) {
-		fprintf(fp, "%s\n", node->data);
-	}
-	fclose(fp);
-	curl_slist_free_all(list);
-}
-
-static void extract_header_field(const char *field, GList **values, FILE *fp)
-{
-	GRegex *regex;
-	GString *gstr = g_string_sized_new(128);
-	char buffer[1024];
-	GError *error = NULL;
-
-	g_string_printf(gstr, "%s: *(.+)$", field);
-	regex = g_regex_new(gstr->str, 0, 0, &error);
-	while (fgets(buffer, sizeof(buffer), fp)) {
-		GMatchInfo *info;
-		gchar *str;
-
-		g_regex_match(regex, buffer, 0, &info);
-		if (!g_match_info_matches(info))
-			continue;
-		str = g_strdup(g_match_info_fetch(info, 1));
-		*values = g_list_prepend(*values, str);
-	}
-	g_regex_unref(regex);
-	g_string_free(gstr, TRUE);
 }
 #endif
 
@@ -344,6 +323,7 @@ size_t store_cookie(void *ptr, size_t size, size_t nmemb, void *userdata)
 	return size * nmemb;
 }
 
+#if !USE_FAKE_SOURCE
 static int login(void)
 {
 	int ret = 0;
@@ -376,9 +356,11 @@ end:
 	fflush(stderr);
 	return ret;
 }
+#endif
 
 static void prepare_connection(void)
 {
+#if !USE_FAKE_SOURCE
 	if (conn.handle) {
 		curl_easy_cleanup(conn.handle);
 		conn.handle = NULL;
@@ -399,6 +381,9 @@ static void prepare_connection(void)
 		conn.handle = NULL;
 		fflush(stderr);
 	}
+#else
+	g_atomic_int_set(&my_status, collecting);
+#endif
 }
 
 #if REAL_TRADE || !USE_FAKE_SOURCE
@@ -423,8 +408,7 @@ static CURLcode perform_request(void)
 }
 #endif
 
-#if !USE_FAKE_SOURCE
-static double get_enter_price(const char *mark)
+static int get_status(enum trade_status *status, double *price)
 {
 	/* "https://www.avanza.se/aza/order/aktie/kopsalj.jsp" */
 	FILE *datafile = fopen(get_filename("transactions", ".txt"), "r");
@@ -432,12 +416,11 @@ static double get_enter_price(const char *mark)
 	GError *error = NULL;
 	GMatchInfo *match_info;
 	char buffer[128], template[64];
-	double x = -1;
-
 	if (datafile == NULL) {
 		return -1;
 	}
-	sprintf(template, "p=([0-9.]+).*%s[.]$", mark);
+	*status = enter_status;
+	sprintf(template, "price=([0-9.]+).*(BUY|SELL); executed[.]$");
 	regex = g_regex_new(template, 0, 0, &error);
 	while (fgets(buffer, sizeof(buffer), datafile)) {
 		gchar *str;
@@ -445,12 +428,20 @@ static double get_enter_price(const char *mark)
 		if (!g_match_info_matches(match_info))
 			continue;
 		str = g_match_info_fetch(match_info, 1);
-		sscanf(str, "%lf", &x);
+		sscanf(str, "%lf", price);
+		str = g_match_info_fetch(match_info, 2);
+		if (strcmp(str, "BUY") == 0)
+			*status = my_position.mode == buy_and_sell ?
+				incomplete : complete;
+		else
+			*status = my_position.mode == buy_and_sell ?
+				complete : incomplete;
 	}
 	g_regex_unref(regex);
-	return x;
+	return 0;
 }
 
+#if 0
 /* We must have logged in in order to do this */
 static long get_hld_qtt(void)
 {
@@ -529,9 +520,10 @@ static void collect_data(void)
 	GRegex *regex;
 	GError *error = NULL;
 	GString *gstr = g_string_sized_new(128);
+	char xchgfile[100];
 	int i;
 	/* The number of shares that we have on the account */
-#if !USE_FAKE_SOURCE
+#if REAL_TRADE
 	long hld_qtt;
 #endif
 	regex = g_regex_new("^<TR.*><TD.*>[^<]*</TD>"
@@ -544,20 +536,23 @@ static void collect_data(void)
 	update_watcher();
 	prepare_connection();
 
-#if !USE_FAKE_SOURCE
-	while ((hld_qtt = get_hld_qtt()) < 0);
-	if ((my_position.mode == sell_and_buy && 
-	     hld_qtt < my_position.quantity) ||
-	    (my_position.mode == buy_and_sell &&
-	     hld_qtt > my_position.quantity)) {
-		double x;
-		my_position.status = incomplete;
-		x = get_enter_price(my_position.mode == buy_and_sell ?
-				    "BUY" : "SELL");
-		if (x > 0) my_position.price = x;
-	} else
-		my_position.status = complete;
-#endif
+/* #if REAL_TRADE */
+/* 	while ((hld_qtt = get_hld_qtt()) < 0); */
+/* 	if ((my_position.mode == sell_and_buy &&  */
+/* 	     hld_qtt < my_position.quantity) || */
+/* 	    (my_position.mode == buy_and_sell && */
+/* 	     hld_qtt > my_position.quantity)) { */
+/* 		double x; */
+/* 		my_position.status = incomplete; */
+/* 		x = get_enter_price(my_position.mode == buy_and_sell ? */
+/* 				    "BUY" : "SELL"); */
+/* 		if (x > 0) my_position.price = x; */
+/* 	} else */
+/* 		my_position.status = complete; */
+/* #endif */
+	sprintf(xchgfile, "./intraday-%s.html", orderbookId);
+	if (get_status(&my_position.status, &my_position.price) != 0)
+		return;
 	for (i = 0; g_atomic_int_get(&my_status) == collecting; i = 1) {
 		struct stat st;
 		FILE *fp;
@@ -566,7 +561,7 @@ static void collect_data(void)
 #endif
 		/* Report to the watcher that I am active */
 		update_watcher();
-		fp = fopen("./intraday.html", "w");
+		fp = fopen(xchgfile, "w");
 		if (i == 0)
 			memset(&market, 0, sizeof(market));
 
@@ -596,6 +591,7 @@ static void collect_data(void)
 		req = fopen("./req-fifo", "w");
 		if (!req) {
 			my_status = finished;
+			fprintf(stderr, "Cannot open ./req-fifo. Quit.\n");
 			continue;
 		}
 		fprintf(req, "get");
@@ -607,9 +603,9 @@ static void collect_data(void)
 		if (strncmp(message, "done", sizeof(message)))
 			continue;
 #endif
-		stat("./intraday.html", &st);
+		stat(xchgfile, &st);
 		if (st.st_size) {
-			fp = fopen("./intraday.html", "r");
+			fp = fopen(xchgfile, "r");
 			refine_data(fp, regex);
 			fclose(fp);
 		} else {
@@ -853,7 +849,7 @@ int main(int argc, char *argv[])
 	int i;
 	int opt;
 	memset(&my_position, 0, sizeof(my_position));
-	while ((opt = getopt(argc, argv, "s:m:p:q:t:c:")) != -1) {
+	while ((opt = getopt(argc, argv, "s:m:p:q:c:t:")) != -1) {
                switch (opt) {
                case 's':
 		       sscanf(optarg, "%s", orderbookId);
@@ -867,11 +863,11 @@ int main(int argc, char *argv[])
 	       case 'q':
 		       sscanf(optarg, "%ld", &my_position.quantity);
 		       break;
-	       case 't':
-		       my_position.trapped = 1;
-		       break;
 	       case 'c':
 		       sscanf(optarg, "%s", calibration);
+		       break;
+	       case 't':
+		       sscanf(optarg, "%d", (int *)&my_position.status);
 		       break;
                default: /* '?' */
                    fprintf(stderr, "Usage: %s -s stock -m mode "
@@ -880,6 +876,7 @@ int main(int argc, char *argv[])
                    exit(EXIT_FAILURE);
                }
 	}
+	enter_status = my_position.status;
 	if (strlen(orderbookId) == 0 || my_position.quantity == 0) {
                    fprintf(stderr, "Usage: %s [-s stock] [-m] mode "
 			   "[-p] enter_price -q quantity\n",

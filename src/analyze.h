@@ -85,12 +85,12 @@ struct trade_position {
 	double price;
 	/* The number of shares we trade */
 	long quantity;
-	unsigned int trapped;
 };
 
 
 extern struct trade_position my_position;
 extern struct market market;
+extern enum trade_status enter_status;
 extern char orderbookId[20];
 extern char calibration[20];
 extern struct trade_const trade_constants;
