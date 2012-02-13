@@ -143,39 +143,39 @@ void analyze(void)
 			orderbookId);
 		engEvalString(mateng, buffer);
 
-		sprintf(buffer, "[spec%1$s, action%1$s, retcode%1$s, msg%1$s] = analyze("
-			"'%1$s', %2$d, %3$d, %4$f, %5$ld, "
-			"spec%1$s, 0, '%6$s', 0);",
-			orderbookId, my_position.mode,
-			my_position.status, my_position.price,
-			my_position.quantity, calibration);
-		engEvalString(mateng, buffer);
+		/* sprintf(buffer, "[spec%1$s, action%1$s, retcode%1$s, msg%1$s] = analyze(" */
+		/* 	"'%1$s', %2$d, %3$d, %4$f, %5$ld, " */
+		/* 	"spec%1$s, 0, '%6$s', 0);", */
+		/* 	orderbookId, my_position.mode, */
+		/* 	my_position.status, my_position.price, */
+		/* 	my_position.quantity, calibration); */
+		/* engEvalString(mateng, buffer); */
 
-		mxa = get_mat_varialbe(mateng, retcode);
-		l = *(int8_t *)mxGetData(mxa);
-		mxDestroyArray(mxa);
-		model_fits = l >= 0;
+		/* mxa = get_mat_varialbe(mateng, retcode); */
+		/* l = *(int8_t *)mxGetData(mxa); */
+		/* mxDestroyArray(mxa); */
+		/* model_fits = l >= 0; */
 
 		count++;
-		return;
+		/* return; */
 
 	}
 	datafile = fopen(get_filename("records", ".dat"), "r");
 	l = fnum_of_line(datafile);
 	fclose(datafile);
 	if (l < MIN_ANALYSIS_SIZE) {
-		sprintf(buffer, "[spec%1$s, action%1$s, retcode%1$s, msg%1$s] "
-			"= analyze('%1$s', %2$d, %3$d, %4$f, %5$ld, "
-			"spec%1$s, %6$d, '%7$s', 0);", orderbookId,
-			my_position.mode, my_position.status,
-			my_position.price, my_position.quantity, model_fits,
-			calibration);
-		engEvalString(mateng, buffer);
+		/* sprintf(buffer, "[spec%1$s, action%1$s, retcode%1$s, msg%1$s] " */
+		/* 	"= analyze('%1$s', %2$d, %3$d, %4$f, %5$ld, " */
+		/* 	"spec%1$s, %6$d, '%7$s', 0);", orderbookId, */
+		/* 	my_position.mode, my_position.status, */
+		/* 	my_position.price, my_position.quantity, model_fits, */
+		/* 	calibration); */
+		/* engEvalString(mateng, buffer); */
 
-		mxa = get_mat_varialbe(mateng, retcode);
-		l = *(int8_t *)mxGetData(mxa);
-		mxDestroyArray(mxa);
-		model_fits = l >= 0;
+		/* mxa = get_mat_varialbe(mateng, retcode); */
+		/* l = *(int8_t *)mxGetData(mxa); */
+		/* mxDestroyArray(mxa); */
+		/* model_fits = l >= 0; */
 
 		return;
 	}
@@ -203,7 +203,6 @@ void analyze(void)
 	printf("%s; %s; ", msg, action_strings[action]);
 	mxFree(msg);
 
-	if (l) return;
 	if (action != action_none &&
 	    !(my_position.status == complete && !allow_new_positions)) {
 		if ((status = execute(action)) == order_executed)

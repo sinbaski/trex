@@ -10,7 +10,8 @@ r = mod(length(X), n);
 for l = length(avgs):-1:1
     b = l * n + r;
     a = b - n + 1;
-    avgs(l) = (X(a : b)' * weights(a : b)) / sum(weights(a : b));
+    % avgs(l) = (X(a : b)' * weights(a : b)) / sum(weights(a : b));
+    avgs(l) = mean(X(a : b));
     % avgs(l) = X(b);
 end
 % for k = 0:num-1

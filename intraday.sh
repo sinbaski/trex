@@ -13,7 +13,7 @@ price=("118.00" "81.50" "0" "0")
 quantity=(730 830 1358 1054)
 
 # The data to use for calibration
-calibration=(2012-01-30 2012-01-30 2012-01-30 2012-01-30)
+calibration=(yes yes yes yes)
 
 status=(0 0 0 0)
 

@@ -30,7 +30,7 @@ for a = 4:10
                             'R', b, 'M', a);
             [spec, errors, LLF, residuals, sigmas, summary] = ...
                 garchfit(spec, returns);
-            fprintf(2, '%u %u %u ', a, b, c);
+            fprintf(2, '%u %u %u %u ', a, b, c, c);
             if ~isempty(strfind(summary.converge, 'converged'))
                 modelFitted = 1;
                 fprintf(2, 'converges.\n');

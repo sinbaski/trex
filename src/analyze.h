@@ -5,7 +5,7 @@
 
 #define ORDER_DEPTH 5
 /* Most likely 80 */
-#define MIN_ANALYSIS_SIZE 400
+#define MIN_ANALYSIS_SIZE 500
 #define MAX_TRADES_COUNT 80
 
 #define DATA_ROW_WIDTH 32
