@@ -5,7 +5,7 @@
 
 #define ORDER_DEPTH 5
 /* Most likely 80 */
-#define MIN_ANALYSIS_SIZE 500
+#define MIN_ANALYSIS_SIZE 80
 #define MAX_TRADES_COUNT 80
 
 #define DATA_ROW_WIDTH 32
@@ -46,8 +46,12 @@ struct timely_indicator {
 };
 
 struct indicators {
+	int initialized;
+	double ret;
+	double avg_ret;
 	double tolerated_loss;
 	unsigned int allow_new_positions:1;
+	struct timely_indicator timely[2];
 };
 
 struct trade_const {
@@ -69,7 +73,7 @@ enum trade_status {
 enum action_type {
 	action_buy = 0,
 	action_sell,
-	action_none,
+	action_observe,
 	number_of_action_types,
 };
 
@@ -85,14 +89,13 @@ struct trade_position {
 	double price;
 	/* The number of shares we trade */
 	long quantity;
+	unsigned int trapped;
 };
 
 
 extern struct trade_position my_position;
 extern struct market market;
-extern enum trade_status enter_status;
 extern char orderbookId[20];
-extern char calibration[20];
 extern struct trade_const trade_constants;
 
 int inline indicators_initialized(void);
