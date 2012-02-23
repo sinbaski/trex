@@ -52,25 +52,33 @@ int main (int argc, char *argv[])
 	time_t now;
 	FILE *req, *resp;
 	FILE  *datafile = NULL;
+	char buf[50];
+	int done = 1;
 
-	if (argc == 2) {
-		datafile = fopen(argv[1], "r");
+	if (argc != 3) {
+		printf("Usage: %s input_file outputfile\n", argv[0]);
+		return 0;
 	}
 	time(&now);
 	srand(now);
-	int done = 1;
+	datafile = fopen(argv[1], "r");
+	sprintf(buf, "intraday-%s.html", argv[2]);
+
 	do {
 		FILE *fp;
 		int i;
 		long n = 0;
 		struct tm *timep;
+
+
 		req = fopen("./req-fifo", "r");
 		fscanf(req, "%s", message);
 		fclose(req);
 
 		if (strncmp(message, "get", sizeof(message)))
 			break;
-		fp = fopen(DATA_XCHG_FILE, "w");
+
+		fp = fopen(buf, "w");
 		fprintf(fp, "Avslut Company\n");
 		fprintf(fp, "Antal</TD></TR>\n");
 

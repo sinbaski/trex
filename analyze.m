@@ -17,7 +17,7 @@ numPaths = 2000;
 
 windowsize = 20;
 windownum = 25;
-castnum = 10;
+castnum = 15;
 N = windownum * windowsize;
 
 policy = struct('min_open_profit', 140, 'min_close_profit', 140);
@@ -104,6 +104,7 @@ forecast = ret2price(simret, price(end));
 % forecast = forecast(2:end, :);
 % Calculate the minimum price difference
 
+%rt = mean(price2ret(price(end - 40 + 1 : end))) * (castnum / 2);
 clear prefitted errors LLF residuals sigmas summary P RT
 
 if mystatus == 0
@@ -136,7 +137,7 @@ if mymode == 0 && mystatus == 0
     
     cond = @(p) p > price(end);
     prob0 = xxl_prob(price(end - N + 1 : end), cond);
-    if prob0 > 0.7 && prob > 0.6
+    if prob0 > 0.55 && prob > 0.68
         action = int8(BUY);
     end
     msg = sprintf('[%s] price=%f + %f; prob0 = %f; prob = %f',...
@@ -165,7 +166,7 @@ elseif mymode == 1 && mystatus == 0
     cond = @(p) p < price(end);
     prob0 = xxl_prob(price(end - N + 1 : end), cond);
 
-    if prob0 > 0.7 && prob > 0.6
+    if prob0 > 0.55 && prob > 0.68
         action = int8(SELL);
     end
     msg = sprintf('[%s] price=%f + %f; prob0 = %f; prob = %f',...

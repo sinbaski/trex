@@ -561,11 +561,11 @@ static void collect_data(void)
 #endif
 		/* Report to the watcher that I am active */
 		update_watcher();
-		fp = fopen(xchgfile, "w");
 		if (i == 0)
 			memset(&market, 0, sizeof(market));
 
 #if !USE_FAKE_SOURCE
+		fp = fopen(xchgfile, "w");
 		time(&t1);
 		refresh_conn();
 		curl_easy_setopt(conn.handle, CURLOPT_WRITEDATA, fp);
