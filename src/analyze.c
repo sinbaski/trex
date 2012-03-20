@@ -79,6 +79,7 @@ void set_position(const struct trade_position *position)
 static inline double get_return(void)
 {
 	return 0.6 * indicators.ret + 0.4 * indicators.avg_ret;
+	/* return indicators.avg_ret; */
 }
 
 /* static double weighted_average(int index, int size) */
@@ -140,13 +141,26 @@ static double cal_avg_ret(FILE *datafile, long n, long m)
 {
 	long i;
 	double sum;
-
+	/* double weights[] = { */
+	/* 	0.6020, */
+	/* 	0.2396, */
+	/* 	0.0954, */
+	/* 	0.0380, */
+	/* 	0.0151, */
+	/* 	0.0060, */
+	/* 	0.0024, */
+	/* 	0.0010, */
+	/* 	0.0004, */
+	/* 	0.0002 */
+	/* }; */
 	assert(n > 0 && m > 0 && fnum_of_line(datafile) >= n * m - (n - 1));
 	for (i = 0, sum = 0; i < n; i++) {
 		/* sum += cal_ret(datafile, i * (m - 1), (i + 1) * m - i); */
+		/* sum += weights[i] * cal_ret(datafile, i * m - i, (i + 1) * m - i); */
 		sum += cal_ret(datafile, i * m - i, (i + 1) * m - i);
 	}
 	return sum / n;
+	/* return sum; */
 }
 
 static struct price_interval *new_price_interval(const char *price, long n)
@@ -272,7 +286,8 @@ static void cal_indicator(FILE *datafile, time_t since, int idx)
 	first_run = g_list_length(ind->probdist) == 0;
 	sincestr = make_timestring(since);
 	if (first_run) {
-		for (i = 1; 1; i++) {
+		n = fnum_of_line(datafile);
+		for (i = 1; i <= n; i++) {
 			fseek(datafile, -i * DATA_ROW_WIDTH, SEEK_END);
 			fscanf(datafile, "%s\t%s\t%lf\t%ld",
 			       trade.market, trade.time, &trade.price,
@@ -282,10 +297,8 @@ static void cal_indicator(FILE *datafile, time_t since, int idx)
 				break;
 			}
 			update_probdist(idx, &trade, 1);
-			if (ftell(datafile) == DATA_ROW_WIDTH)
-				break;
 		}
-		ind->mark = fnum_of_line(datafile) - i + 1;
+		ind->mark = n - i + 1;
 		ind->sample_size = i;
 	} else {
 		struct trade *p;
@@ -517,7 +530,7 @@ static int is_trapped(void)
 		prob = get_price_prob(higher_than, my_position.price, idx);
 	else
 		prob = get_price_prob(lower_than, my_position.price, idx);
-	return prob <= 0.32;
+	return prob <= 0.2;
 }
 
 static enum action_type price_comparer(double latest, int idx)
@@ -628,12 +641,15 @@ void analyze()
 			break;
 		}
 		if (trapped) {
-			if (profit > 0 || -profit < indicators.tolerated_loss) {
-				action = my_position.mode == buy_and_sell ?
-					action_sell : action_buy;
-			} else {
-				action = action_observe;
-			}
+			/* if (profit > 0 || -profit < indicators.tolerated_loss) { */
+			/* 	action = my_position.mode == buy_and_sell ? */
+			/* 		action_sell : action_buy; */
+			/* } else { */
+			/* 	action = action_observe; */
+			/* } */
+			action = my_position.mode == buy_and_sell ?
+				action_sell : action_buy;
+			
 		}
 		break;
 	}
@@ -644,7 +660,6 @@ void analyze()
 	} else {
 		printf("\n");
 	}
-	discard_old_records(g_list_length(market.trades) - MAX_TRADES_COUNT);
 	fflush(stdout);
 }
 
