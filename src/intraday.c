@@ -125,6 +125,21 @@ static const struct stock_info *get_stock_info(const char *id)
 	return NULL;
 }
 
+time_t get_trade(FILE *datafile, long n, struct trade *trade1)
+{
+	long offset = ftell(datafile);
+	struct trade trade2;
+	struct trade *trade = trade1 ? trade1 : &trade2;
+
+	assert(n >= 0 && n < fnum_of_line(datafile));
+	fseek(datafile, n * DATA_ROW_WIDTH, SEEK_SET);
+	fscanf(datafile, "%s\t%s\t%lf\t%ld",
+	       trade->market, trade->time, &trade->price,
+	       &trade->quantity);
+	fseek(datafile, offset, SEEK_SET);
+	return parse_time(trade->time);
+}
+
 static void free_trade (void *p)
 {
 	g_slice_free(struct trade, p);

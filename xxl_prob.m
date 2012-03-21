@@ -1,2 +1,3 @@
-function prob = xxl_prob(X, cond)
-prob = double(xxl_count(X, cond)) / prod(size(X));
+function probs = xxl_prob(X, cond)
+[rows columns] = size(X);
+probs = double(xxl_count(X, cond)) / double(columns);

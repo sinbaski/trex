@@ -2,7 +2,7 @@ CC := gcc
 srcdir := src
 objdir := obj
 
-USE_FAKE_SOURCE := 0
+USE_FAKE_SOURCE := 1
 DAEMONIZE := 0
 REAL_TRADE := 0
 CURFEW_AFT_5 = 1

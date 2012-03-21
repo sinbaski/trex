@@ -15,8 +15,8 @@ end
 
 numPaths = 2000;
 
-windowsize = 20;
-windownum = 25;
+windowsize = 40;
+windownum = 80;
 castnum = 15;
 N = windownum * windowsize;
 
@@ -24,21 +24,20 @@ policy = struct('min_open_profit', 140, 'min_close_profit', 140);
 
 fprintf(2, 'analyze has started.\n');
 
-% calfile = fopen(strcat('records/', stock, '-', ...
-%                        calibration, '.dat'), 'r');
+calfile = fopen(strcat('records/', stock, '-', ...
+                       calibration, '.dat'), 'r');
 datfile = fopen(strcat('records/', stock, '-', ...
                        datestr(today, 'yyyy-mm-dd'), ...
                        '.dat'), 'r');
 feerate = 0.08E-2;
 
-% n1 = fnum_of_line(calfile);
-n1 = 0;
+n1 = fnum_of_line(calfile);
 n2 = fnum_of_line(datfile);
 
-if n2 < N
+if n1 + n2 < N || n2 < 800
     retcode = int8(-3);
     action = int8(NONE);
-    msg = sprintf('Not enough data.');
+    msg = sprintf('Not enough data.\n');
     newspec = spec;
     return;
 end
@@ -47,17 +46,17 @@ T = cell(n1 + n2, 1);
 price = NaN(n1 + n2, 1);
 quantity = NaN(n1 + n2, 1);
 
-% C = textscan(calfile, '%*s\t%s\t%f\t%d', n1);
-% T(1 : n1) = C{1};
-% price(1:n1, 1) = C{2};
-% quantity(1:n1, 1) = C{3};
+C = textscan(calfile, '%*s\t%s\t%f\t%d', n1);
+T(1 : n1) = C{1};
+price(1:n1, 1) = C{2};
+quantity(1:n1, 1) = C{3};
 
 C = textscan(datfile, '%*s\t%s\t%f\t%d', n2);
 T(n1 + 1 : end) = C{1};
 price(n1 + 1 : end, 1) = C{2};
 quantity(n1 + 1 : end, 1) = C{3};
 
-% fclose(calfile);
+fclose(calfile);
 fclose(datfile);
 
 % We are done with loading data
@@ -107,16 +106,15 @@ forecast = ret2price(simret, price(end));
 %rt = mean(price2ret(price(end - 40 + 1 : end))) * (castnum / 2);
 clear prefitted errors LLF residuals sigmas summary P RT
 
-if mystatus == 0
-    mindiff  = policy.min_open_profit + ...
-        2 * price(end) * feerate * myquantity;
-    mindiff = double(mindiff) / double(myquantity);
-    fprintf(2, 'mindiff = %f\n', mindiff);
-    if mymode == 0
-        mindiff = mindiff / (1 - feerate);
-    else
-        mindiff = mindiff / (1 + feerate);
-    end
+
+mindiff  = policy.min_open_profit + ...
+    2 * price(end) * feerate * myquantity;
+mindiff = double(mindiff) / double(myquantity);
+fprintf(2, 'mindiff = %f\n', mindiff);
+if mymode == 0
+    mindiff = mindiff / (1 - feerate);
+else
+    mindiff = mindiff / (1 + feerate);
 end
 
 retcode = int8(0);
@@ -135,60 +133,56 @@ if mymode == 0 && mystatus == 0
     cond = @(p) p > price(end) + mindiff;
     prob = xxl_prob(forecast, cond);
     
-    cond = @(p) p > price(end);
-    prob0 = xxl_prob(price(end - N + 1 : end), cond);
-    if prob0 > 0.55 && prob > 0.68
+    if max(prob) > 0.68
         action = int8(BUY);
     end
-    msg = sprintf('[%s] price=%f + %f; prob0 = %f; prob = %f',...
-                  char(T(end)), price(end), mindiff, prob0, prob);
+    msg = sprintf('[%s] price=%f + %f; prob = %f',...
+                  char(T(end)), price(end), mindiff, max(prob));
 elseif mymode == 0 && mystatus == 1
     profit = xxl_profit(mymode, myprice, myquantity,...
                         price(end), feerate);
-    cond = @(p) p > price(end);
-    prob = xxl_prob(forecast, cond);
-
-    if profit > 0 && prob < 0.5
-        action = int8(SELL);
+    if profit > 0
+        cond = @(p) p > price(end) + mindiff;
+        prob = xxl_prob(forecast, cond);
+        if max(prob) < 0.68
+            action = int8(SELL);
+        end
     elseif profit < 0
-            cond = @(p) price2ret([myprice; p]) < -0.5E-2;
-            prob = xxl_prob(forecast, cond);
-            if prob > 0.5
-                action = int8(SELL);
-            end
+        cond = @(p) p > price(end);
+        prob = xxl_prob(forecast, cond);
+        if max(prob) < 0.68
+            action = int8(SELL);
+        end
     end
     msg = sprintf('[%s] price=%f; profit = %f; prob = %f',...
-                  char(T(end)), price(end), profit, prob);
+                  char(T(end)), price(end), profit, max(prob));
 elseif mymode == 1 && mystatus == 0
     cond = @(p) p < price(end) - mindiff;
     prob = xxl_prob(forecast, cond);
 
-    cond = @(p) p < price(end);
-    prob0 = xxl_prob(price(end - N + 1 : end), cond);
-
-    if prob0 > 0.55 && prob > 0.68
+    if max(prob) > 0.68
         action = int8(SELL);
     end
-    msg = sprintf('[%s] price=%f + %f; prob0 = %f; prob = %f',...
-                  char(T(end)), price(end), mindiff, prob0, prob);
+    msg = sprintf('[%s] price=%f + %f; prob = %f',...
+                  char(T(end)), price(end), mindiff, max(prob));
 elseif mymode == 1 && mystatus == 1
     profit = xxl_profit(mymode, myprice, myquantity,...
                         price(end), feerate);
-    cond = @(p) p < price(end);
-    prob = xxl_prob(forecast, cond);
-
-    if profit > 0 && prob < 0.5
-        action = int8(BUY);
+    if profit > 0
+        cond = @(p) p < price(end) - mindiff;
+        prob = xxl_prob(forecast, cond);
+        if max(prob) < 0.68
+            action = int8(BUY);
+        end
     elseif profit < 0
-            cond = @(p) price2ret([myprice; p]) > 0.5E-2;
-            prob = xxl_prob(forecast, cond);
-            if prob > 0.5
-                action = int8(BUY);
-            end
+        cond = @(p) p < price(end);
+        prob = xxl_prob(forecast, cond);
+        if max(prob) < 0.68
+            action = int8(BUY);
+        end
     end
     msg = sprintf('[%s] price=%f; profit = %f; prob = %f',...
-                  char(T(end)), price(end), profit, prob);
-
+                  char(T(end)), price(end), profit, max(prob));
 end
 
 % elseif mymode == 1 && mystatus == 0

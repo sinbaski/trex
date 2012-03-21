@@ -7,13 +7,13 @@ stock=(183828 217041 183830 181870)
 mode=(0 0 0 0)
 
 #entering price
-price=("118.00" "81.50" "0" "0")
+price=("0" "0" "0" "0")
 
 # entering quantity
 quantity=(730 830 1358 1054)
 
 # The data to use for calibration
-calibration=(yes yes yes yes)
+calibration=(2012-03-19 2012-03-19 2012-03-19 2012-03-19)
 
 status=(0 0 0 0)
 
