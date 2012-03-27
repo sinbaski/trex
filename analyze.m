@@ -35,9 +35,10 @@ n1 = fnum_of_line(calfile);
 n2 = fnum_of_line(datfile);
 
 if n1 + n2 < N || n2 < 800
+% if n1 + n2 < N
     retcode = int8(-3);
     action = int8(NONE);
-    msg = sprintf('Not enough data.\n');
+    msg = sprintf('Not enough data. n1 = %d, n2 = %d', n1, n2);
     newspec = spec;
     return;
 end
@@ -67,6 +68,59 @@ P = average_price(price(end - N + 1 : end), ...
                   windowsize);
 RT = price2ret(P);
 
+index = 1:windownum;
+% we first do a linear fit
+coeff = polyfit(index', P, 1);
+Y = transpose(polyval(coeff, index));
+error = mean(abs(Y - P) ./ Y);
+if error <= 3.0E-3
+    newspec = spec;
+    retcode = int8(0);
+    maxerr = max(abs(Y - P) ./ Y);
+    nowerr = (price(end) - Y(end))/Y(end);
+    if mystatus == 0 && abs(nowerr)/maxerr >= 0.7
+        if coeff(1) > 0 && nowerr < 0 && mymode == 0 
+            action = int8(BUY);
+        elseif coeff(1) < 0 &&  nowerr > 0 && mymode == 1
+            action = int8(SELL);
+        end
+        msg = sprintf('[%s] price=%f; maxerr = %f; nowerr = %f; error = %f',...
+                      char(T(end)), price(end), maxerr, nowerr, error);
+    elseif mystatus == 1
+        profit = xxl_profit(mymode, myprice, myquantity,...
+                            price(end), feerate);
+        if profit > 0
+            if mymode == 0 && nowerr > maxerr * 0.65
+                action = int8(SELL);
+            elseif mymode == 1 && nowerr < -maxerr * 0.65
+                action = int8(BUY);
+            else
+                action = int8(NONE);
+            end
+        else
+            if mymode == 0 && myprice > Y(end) * (1 + maxerr) && ...
+                       coeff(1) < 0
+                action = int8(SELL);
+            elseif mymode == 1 && myprice < Y(end) * (1 - maxerr) && ...
+                       coeff(1) > 0
+                action = int8(BUY);
+            else
+                action = int8(NONE);
+            end
+        end
+
+        msg = sprintf('[%s] price=%f; maxerr = %f; nowerr = %f; error = %f; profit = %f', ...
+                       char(T(end)), price(end), maxerr, nowerr, error, profit);
+    else
+        action = int8(NONE);
+        msg = sprintf('[%s] price=%f; maxerr = %f; nowerr = %f; error = %f', ...
+                      char(T(end)), price(end), maxerr, nowerr, error);
+    end
+    
+    return;
+end
+clear Y index error maxerr nowerr
+
 [newspec, errors, LLF, residuals, sigmas, summary] = ...
     xxl_fit(spec, RT, prefitted);
 fprintf(2, 'xxl_fit has returned. %s.\n', summary.converge);
@@ -92,7 +146,7 @@ end
 if ~simulate
     action = int8(NONE);
     retcode = int8(0);
-    msg = sprintf('[%s] No simulation.\n', char(T(end)));
+    msg = sprintf('[%s] No simulation.', char(T(end)));
     return;
 end
 [siminn, simsig, simret] = ...
