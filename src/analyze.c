@@ -90,7 +90,7 @@ static enum order_status execute(enum action_type action)
 	return status;
 }
 
-#define get_mat_varialbe(eng, name)				\
+#define get_mat_variable(eng, name)				\
 	({							\
 		char buf[100];					\
 		sprintf(buf, "%s%s", #name, orderbookId);	\
@@ -151,7 +151,7 @@ void analyze(void)
 			my_position.quantity, calibration);
 		engEvalString(mateng, buffer);
 
-		mxa = get_mat_varialbe(mateng, retcode);
+		mxa = get_mat_variable(mateng, retcode);
 		l = *(int8_t *)mxGetData(mxa);
 		mxDestroyArray(mxa);
 		model_fits = l >= 0;
@@ -172,10 +172,19 @@ void analyze(void)
 			calibration);
 		engEvalString(mateng, buffer);
 
-		mxa = get_mat_varialbe(mateng, retcode);
+		mxa = get_mat_variable(mateng, spec);
+		mxDestroyArray(mxa);
+
+		mxa = get_mat_variable(mateng, action);
+		mxDestroyArray(mxa);
+
+		mxa = get_mat_variable(mateng, retcode);
 		l = *(int8_t *)mxGetData(mxa);
 		mxDestroyArray(mxa);
 		model_fits = l >= 0;
+
+		mxa = get_mat_variable(mateng, msg);
+		mxDestroyArray(mxa);
 
 		return;
 	}
@@ -187,15 +196,15 @@ void analyze(void)
 		model_fits, calibration);
 	engEvalString(mateng, buffer);
 
-	mxa = get_mat_varialbe(mateng, action);
+	mxa = get_mat_variable(mateng, action);
 	action = *(int8_t *)mxGetData(mxa);
 	mxDestroyArray(mxa);
 
-	mxa = get_mat_varialbe(mateng, msg);
+	mxa = get_mat_variable(mateng, msg);
 	msg = mxArrayToString(mxa);
 	mxDestroyArray(mxa);
 
-	mxa = get_mat_varialbe(mateng, retcode);
+	mxa = get_mat_variable(mateng, retcode);
 	l = *(int8_t *)mxGetData(mxa);
 	mxDestroyArray(mxa);
 	model_fits = l >= 0;
@@ -203,7 +212,7 @@ void analyze(void)
 	printf("%s; %s; ", msg, action_strings[action]);
 	mxFree(msg);
 
-	if (l) return;
+	if (l) goto end;
 	if (action != action_none &&
 	    !(my_position.status == complete && !allow_new_positions)) {
 		if ((status = execute(action)) == order_executed)
@@ -212,6 +221,7 @@ void analyze(void)
 			printf("%s.", status == order_killed ?
 			       "killed" : "failed");
 	}
+end:
 	printf("\n");
 	fflush(stdout);
 }
