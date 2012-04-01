@@ -43,10 +43,15 @@ struct stock_info {
 	const char *dataid;
 	const char *orderid;
 } stockinfo[] = {
+	/* { */
+	/* 	"Boliden", */
+	/* 	"183828", */
+	/* 	"5564" */
+	/* }, */
 	{
-		"Boliden",
-		"183828",
-		"5564"
+		"Securitas B",
+		"183950",
+		"5270"
 	},
 	{
 		"Alliance Oil Company SDB",
