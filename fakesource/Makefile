@@ -3,8 +3,10 @@ CC := gcc
 srcs := $(wildcard *.c)
 objs := $(patsubst %.c, %.o, $(srcs))
 
-CFLAGS := -c -Wall -Werror -g3 -I../include
-LDFLAGS := -lm
+CFLAGS := -c -Wall -Werror -g3 -I../include \
+$(shell mysql_config --cflags)
+
+LDFLAGS := -lm 	$(shell mysql_config --libs)
 
 $(objs): %.o: %.c
 	$(CC) $(CFLAGS) $^ -o $@

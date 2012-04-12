@@ -8,20 +8,13 @@
 #define get_filename(dir, ext)						\
 	({								\
 		char filename[50];					\
-		time_t today;						\
-		struct tm *timep;					\
-									\
-		time(&today);						\
-		timep = localtime(&today);				\
-									\
 		memset(filename, 0, sizeof(filename));			\
 		strncpy(filename, dir, strlen(dir));			\
 		if (!g_str_has_suffix(dir, "/"))			\
 			filename[strlen(dir)] = '/';			\
-		sprintf(filename + strlen(filename), "%s-%d-%02d-%02d",\
+		sprintf(filename + strlen(filename), "%s-%s",		\
 			orderbookId,					\
-			timep->tm_year + 1900, timep->tm_mon + 1,	\
-			timep->tm_mday);				\
+			todays_date);					\
 		if (!g_str_has_prefix(ext, "."))			\
 			filename[strlen(filename)] = '.';		\
 		strncpy(filename + strlen(filename), ext, strlen(ext)); \
@@ -41,20 +34,20 @@
 		str;						\
 	})
 
-#define get_datestring()					\
-	({							\
-		char str[9];					\
-		time_t now;					\
-		struct tm *timep;				\
-		memset(str, 0, sizeof(str));			\
-		time(&now);					\
-		timep = localtime(&now);			\
+#define get_datestring()						\
+	({								\
+		char str[9];						\
+		time_t now;						\
+		struct tm *timep;					\
+		memset(str, 0, sizeof(str));				\
+		time(&now);						\
+		timep = localtime(&now);				\
 		sprintf(str, "%4d-%02d-%02d", timep->tm_year + 1900,	\
 			timep->tm_mon + 1, timep->tm_mday);		\
-		str;						\
+		str;							\
 	})
 
-#define make_timestring(x)				\
+#define make_timestring(x)					\
 	({							\
 		char ts_str[9];					\
 		struct tm *ts;					\

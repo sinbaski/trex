@@ -11,6 +11,7 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <curl/curl.h>
+#include <mysql.h>
 #include "analyze.h"
 #include "utilities.h"
 
@@ -38,11 +39,7 @@ struct connection {
 	.valid = 0
 };
 
-struct stock_info {
-	const char *name;
-	const char *dataid;
-	const char *orderid;
-} stockinfo[] = {
+const struct stock_info stockinfo[] = {
 	/* { */
 	/* 	"Boliden", */
 	/* 	"183828", */
@@ -71,8 +68,10 @@ struct stock_info {
 };
 
 char orderbookId[20];
+char todays_date[11];
+MYSQL *mysqldb;
 /* A date string indicating the data used for calibration */
-char calibration[20];
+int do_trade;
 volatile enum status my_status;
 
 #if DAEMONIZE
@@ -119,7 +118,7 @@ static void declare(const char *str)
 	return;
 }
 
-static const struct stock_info *get_stock_info(const char *id)
+const struct stock_info *get_stock_info(const char *id)
 {
 	int i;
 	for (i = 0; i < ARRAY_SIZE(stockinfo); i++) {
@@ -130,18 +129,36 @@ static const struct stock_info *get_stock_info(const char *id)
 	return NULL;
 }
 
-time_t get_trade(FILE *datafile, long n, struct trade *trade1)
+time_t get_trade(MYSQL *db, long n, struct trade *trade1)
 {
-	long offset = ftell(datafile);
+	/* long offset = ftell(datafile); */
 	struct trade trade2;
 	struct trade *trade = trade1 ? trade1 : &trade2;
 
-	assert(n >= 0 && n < fnum_of_line(datafile));
-	fseek(datafile, n * DATA_ROW_WIDTH, SEEK_SET);
-	fscanf(datafile, "%s\t%s\t%lf\t%ld",
-	       trade->market, trade->time, &trade->price,
-	       &trade->quantity);
-	fseek(datafile, offset, SEEK_SET);
+	/* assert(n >= 0 && n < fnum_of_line(datafile)); */
+	/* fseek(datafile, n * DATA_ROW_WIDTH, SEEK_SET); */
+	/* fscanf(datafile, "%s\t%s\t%lf\t%ld", */
+	/*        trade->market, trade->time, &trade->price, */
+	/*        &trade->quantity); */
+	/* fseek(datafile, offset, SEEK_SET); */
+	MYSQL_RES *res;
+	MYSQL_ROW row;
+	GString *gstr = g_string_sized_new(128);
+
+	g_string_printf(gstr, "select price, volume, time(tid) from %s "
+			"where tid like '%s %%' order by tid desc limit %ld, 1;",
+			get_tbl_name(), todays_date, n);
+	if (mysql_query(mysqldb, gstr->str)) {
+		fprintf(stderr, "mysql error: %s\n", mysql_error(mysqldb));
+		return 0;
+	}
+	res = mysql_store_result(mysqldb);
+	row = mysql_fetch_row(res);
+
+	sscanf(row[0], "%lf", &trade->price);
+	sscanf(row[1], "%ld", &trade->quantity);
+	strncpy(trade->time, row[2], sizeof(trade->time));
+	mysql_free_result(res);
 	return parse_time(trade->time);
 }
 
@@ -161,39 +178,76 @@ int trade_equal(const struct trade *t1, const struct trade *t2)
 		t1->quantity == t2->quantity;
 }
 
+int get_num_records(const char *date)
+{
+	MYSQL_RES *res;
+	MYSQL_ROW row;
+	const char *tbl_name = get_tbl_name();
+	GString *gstr = g_string_sized_new(128);
+	int num_rows;
+
+	g_string_printf(gstr, "select count(*) from %s "
+			"where tid like '%s %%';", tbl_name, date);
+	if (mysql_query(mysqldb, gstr->str)) {
+		fprintf(stderr, "mysql error: %s\n", mysql_error(mysqldb));
+		return -1;
+	}
+	res = mysql_store_result(mysqldb);
+	row = mysql_fetch_row(res);
+	sscanf(row[0], "%d", &num_rows);
+	mysql_free_result(res);
+	return num_rows;
+}
+
 static int log_data(int idx)
 {
-	FILE *datafile;
+#if !USE_FAKE_SOURCE
 	const GList *node = g_list_nth(market.trades, idx);
+	GString *gstr = g_string_sized_new(128);
 	struct trade last;
 	static int check_redundancy = 1;
-	int n;
+	int n = 0;
 
 	if (check_redundancy) {
-		datafile = fopen(get_filename("records", ".dat"), "r");
-		if (datafile == NULL)
+		int l = get_num_records(todays_date);
+		if (l == 0)
 			check_redundancy = 0;
-		else {
-			get_trade(datafile, fnum_of_line(datafile) - 1, &last);
-			fclose(datafile);
-		}
+		else if (l < 0)
+			return 0;
+		else
+			get_trade(mysqldb, 0, &last);
 	}
-	datafile = fopen(get_filename("records", ".dat"), "a");
+	/* datafile = fopen(get_filename("records", ".dat"), "a"); */
+	g_string_printf(gstr, "insert into %s values ", get_tbl_name());
 	n = 0;
 	while (node) {
 		const struct trade *trade =
 			(struct trade *)node->data;
 		if (!check_redundancy || strcmp(trade->time, last.time) > 0) {
-			fprintf(datafile, "%6s\t%8s\t%7.2lf\t%7ld\n",
-				trade->market, trade->time,
-				trade->price, trade->quantity);
+			g_string_append_printf(gstr, "(%7.2lf, %ld, '%s %s'),",
+					       trade->price, trade->quantity,
+					       todays_date, trade->time);
+			/* fprintf(datafile, "%6s\t%8s\t%7.2lf\t%7ld\n", */
+			/* 	trade->market, trade->time, */
+			/* 	trade->price, trade->quantity); */
 			check_redundancy = 0;
 			n++;
 		}
 		node = node->next;
 	}
-	fclose(datafile);
+	if (n == 0)
+		goto end;
+	gstr->str[gstr->len - 1] = ';';
+	if (mysql_query(mysqldb, gstr->str)) {
+		fprintf(stderr, "mysql error: %s\n", mysql_error(mysqldb));
+		return 0;
+	}
+end:
+	g_string_free(gstr, TRUE);
 	return n;
+#else
+	return market.new_trades;
+#endif
 }
 
 #if !USE_FAKE_SOURCE
@@ -256,7 +310,7 @@ void discard_old_records(int size)
 
 static void refine_data(FILE *fp, const GRegex *regex)
 {
-	char buffer[1000];
+	char buffer[1024];
 	enum {
 		before, between, within, after
 	} position = before;
@@ -527,6 +581,10 @@ static void collect_data(void)
 	GString *gstr = g_string_sized_new(128);
 	char xchgfile[100];
 	int i;
+#if USE_FAKE_SOURCE
+	FILE *req, *resp;
+	char message[10];
+#endif
 	/* The number of shares that we have on the account */
 #if REAL_TRADE
 	long hld_qtt;
@@ -541,20 +599,6 @@ static void collect_data(void)
 	update_watcher();
 	prepare_connection();
 
-/* #if REAL_TRADE */
-/* 	while ((hld_qtt = get_hld_qtt()) < 0); */
-/* 	if ((my_position.mode == sell_and_buy &&  */
-/* 	     hld_qtt < my_position.quantity) || */
-/* 	    (my_position.mode == buy_and_sell && */
-/* 	     hld_qtt > my_position.quantity)) { */
-/* 		double x; */
-/* 		my_position.status = incomplete; */
-/* 		x = get_enter_price(my_position.mode == buy_and_sell ? */
-/* 				    "BUY" : "SELL"); */
-/* 		if (x > 0) my_position.price = x; */
-/* 	} else */
-/* 		my_position.status = complete; */
-/* #endif */
 	sprintf(xchgfile, "./intraday-%s.html", orderbookId);
 	if (get_status(&my_position.status, &my_position.price) != 0)
 		return;
@@ -590,8 +634,6 @@ static void collect_data(void)
 		}
 		fclose(fp);
 #else
-		FILE *req, *resp;
-		char message[10];
 		/* Request data */
 		req = fopen("./req-fifo", "w");
 		if (!req) {
@@ -605,8 +647,6 @@ static void collect_data(void)
 		resp = fopen("./resp-fifo", "r");
 		fscanf(resp, "%s", message);
 		fclose(resp);
-		if (strncmp(message, "done", sizeof(message)))
-			continue;
 #endif
 		stat(xchgfile, &st);
 		if (st.st_size) {
@@ -626,6 +666,9 @@ static void collect_data(void)
 		time(&t2);
 		if (t2 - t1 < DATA_UPDATE_INTERVAL)
 			sleep(DATA_UPDATE_INTERVAL - (t2 - t1));
+#else
+		if (strncmp(message, "done", sizeof(message)) == 0)
+			g_atomic_int_set(&my_status, finished);
 #endif
 	}
 	curl_easy_cleanup(conn.handle);
@@ -633,6 +676,13 @@ static void collect_data(void)
 	g_list_free_full(market.trades, free_trade);
 	g_regex_unref(regex);
 	g_string_free(gstr, TRUE);
+#if USE_FAKE_SOURCE
+	if (strcmp(message, "done") != 0) {
+		req = fopen("./req-fifo", "w");
+		fprintf(req, "bye");
+		fclose(req);
+	}
+#endif
 }
 
 #if REAL_TRADE
@@ -854,7 +904,7 @@ int main(int argc, char *argv[])
 	int i;
 	int opt;
 	memset(&my_position, 0, sizeof(my_position));
-	while ((opt = getopt(argc, argv, "s:m:p:q:c:t:")) != -1) {
+	while ((opt = getopt(argc, argv, "s:m:p:q:w:t:d:")) != -1) {
                switch (opt) {
                case 's':
 		       sscanf(optarg, "%s", orderbookId);
@@ -868,11 +918,14 @@ int main(int argc, char *argv[])
 	       case 'q':
 		       sscanf(optarg, "%ld", &my_position.quantity);
 		       break;
-	       case 'c':
-		       sscanf(optarg, "%s", calibration);
+	       case 'w':
+		       sscanf(optarg, "%d", &do_trade);
 		       break;
 	       case 't':
 		       sscanf(optarg, "%d", (int *)&my_position.status);
+		       break;
+	       case 'd':
+		       sscanf(optarg, "%s", todays_date);
 		       break;
                default: /* '?' */
                    fprintf(stderr, "Usage: %s -s stock -m mode "
@@ -901,7 +954,17 @@ int main(int argc, char *argv[])
 		sigaction(cared_signals[i], &act, NULL);
 	srand(time(NULL));
 	curl_global_init(CURL_GLOBAL_ALL);
+	mysqldb = mysql_init(NULL);
+	if (!mysql_real_connect(mysqldb, "localhost", "sinbaski", "q1w2e3r4",
+				"avanza", 0, NULL, 0)) {
+		fprintf(stderr, "%s\n", mysql_error(mysqldb));
+		goto end1;
+	}
+	mysql_autocommit(mysqldb, 1);
 	collect_data();
+	mysql_close(mysqldb);
+end1:
 	curl_global_cleanup();
+
 	return 0;
 }

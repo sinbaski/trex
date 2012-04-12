@@ -2,13 +2,21 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 #include <errno.h>
 #include <math.h>
+#include <mysql.h>
 #include "trade.h"
 
 #define DATA_XCHG_FILE "./intraday.html"
 #define PI 3.1416
 #define BATCH_SIZE 15
+#define WORKDIR "/home/xxie/work/avanza/data_extract/intraday"
+
+MYSQL *mysqldb;
+char tbl_name[64];
+char date[11];
+char orderbookId[7];
 
 int get_fake_trade(double t, struct trade *trade)
 {
@@ -46,30 +54,69 @@ int get_real_trade(struct trade *trade, FILE *datafile)
 	return 0;
 }
 
+static void output_record(FILE *fp, const struct trade *trade)
+{
+	int l, m;
+	l = (int)floor(trade->price);
+	m = (int)((trade->price - l) * 100);
+	fprintf(fp, "<TR><TD>ABC</TD><TD>CBA</TD><TD>%s</TD>",
+		trade->market);
+	fprintf(fp, "<TD>%s</TD>", trade->time);
+	fprintf(fp, "<TD>%d,%02d</TD>", l, m);
+	fprintf(fp, "<TD>%ld</TD></TR>\n", trade->quantity);
+}
+
 int main (int argc, char *argv[])
 {
 	char message[10];
 	time_t now;
 	FILE *req, *resp;
-	FILE  *datafile = NULL;
-	char buf[50];
-	int done = 1;
+	MYSQL_RES *res;
+	MYSQL_ROW row;
+	char fname[50], buffer[128];
+	int done = 0;
 
 	if (argc != 3) {
-		printf("Usage: %s input_file outputfile\n", argv[0]);
+		printf("Usage: %s tbl_name date\n", argv[0]);
 		return 0;
 	}
+	chdir(WORKDIR);
+	strcpy(tbl_name, argv[1]);
+	strcpy(date, argv[2]);
 	time(&now);
 	srand(now);
-	datafile = fopen(argv[1], "r");
-	sprintf(buf, "intraday-%s.html", argv[2]);
+	mysqldb = mysql_init(NULL);
+	if (!mysql_real_connect(mysqldb, "localhost",
+				"sinbaski", "q1w2e3r4",
+				"avanza", 0, NULL, 0)) {
+		fprintf(stderr, "%s\n", mysql_error(mysqldb));
+		return -1;
+	}
+	sprintf(buffer, "select dataid from company where name=\"%s\"",
+		tbl_name);
+	mysql_query(mysqldb, buffer);
+	res = mysql_store_result(mysqldb);
+	row = mysql_fetch_row(res);
+	strcpy(orderbookId, row[0]);
+	mysql_free_result(res);	
+	if (strcmp(tbl_name, "fake") != 0) {
+		sprintf(buffer, 
+			"select time(tid), price, volume from %s where "
+			"tid like \"%s %%\" order by tid asc;",
+			tbl_name, date);
+		mysql_query(mysqldb, buffer);
+		res = mysql_use_result(mysqldb);
+	}
 
+	sprintf(fname, "intraday-%s.html", orderbookId);
+
+	done = 0;
 	do {
 		FILE *fp;
 		int i;
 		long n = 0;
 		struct tm *timep;
-
+		struct trade trade;
 
 		req = fopen("./req-fifo", "r");
 		fscanf(req, "%s", message);
@@ -78,40 +125,52 @@ int main (int argc, char *argv[])
 		if (strncmp(message, "get", sizeof(message)))
 			break;
 
-		fp = fopen(buf, "w");
+		fp = fopen(fname, "w");
 		fprintf(fp, "Avslut Company\n");
 		fprintf(fp, "Antal</TD></TR>\n");
 
 		time(&now);
 		now += n++ * 60;
 
-		for (i = 0; i < BATCH_SIZE; i++) {
-			struct trade trade;
-			int l, m;
-			now += BATCH_SIZE - i;
-			timep = localtime(&now);
-			if (!datafile) {
+		if (strcmp(tbl_name, "fake") == 0) {
+			for (i = 0; i < BATCH_SIZE && !done; i++) {
+				now += BATCH_SIZE - i;
+				timep = localtime(&now);
 				done = get_fake_trade(now, &trade);
 				sprintf(trade.time, "%02d:%02d:%02d",
 					timep->tm_hour, timep->tm_min,
 					timep->tm_sec);
 				sprintf(trade.market, "FAKE");
-			} else if ((done = get_real_trade(&trade, datafile)))
-				break;
-			l = (int)floor(trade.price);
-			m = (int)((trade.price - l) * 100);
-			fprintf(fp, "<TR><TD>ABC</TD><TD>CBA</TD><TD>%s</TD>",
-				trade.market);
-			fprintf(fp, "<TD>%s</TD>", trade.time);
-			fprintf(fp, "<TD>%d,%02d</TD>", l, m);
-			fprintf(fp, "<TD>%ld</TD></TR>\n", trade.quantity);
+				output_record(fp, &trade);
+			}
+		} else {
+			for (i = 0; i < BATCH_SIZE && !done; i++) {			
+				row = mysql_fetch_row(res);
+				if (!row) {
+					done = 1;
+					continue;
+				}
+				sprintf(trade.market, "FAKE");
+				strncpy(trade.time, row[0],
+					sizeof(trade.time));
+				sscanf(row[1], "%lf", &trade.price);
+				sscanf(row[2], "%ld", &trade.quantity);
+				output_record(fp, &trade);
+			}
 		}
 		fprintf(fp, "</TABLE>\n");
 		fclose(fp);
 
 		resp = fopen("./resp-fifo", "w");
-		fprintf(resp, "done");
+		if (!done)
+			fprintf(resp, "ready");
+		else
+			fprintf(resp, "done");
 		fclose(resp);
 	} while(!done);
+	if (strcmp(tbl_name, "fake") != 0) {
+		mysql_free_result(res);
+	}
+	mysql_close(mysqldb);
 	return 0;
 }
