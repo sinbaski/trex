@@ -90,12 +90,27 @@ static enum order_status execute(enum action_type action)
 	return status;
 }
 
-#define get_mat_variable(eng, name)				\
-	({							\
-		char buf[100];					\
-		sprintf(buf, "%s%s", #name, orderbookId);	\
-		engGetVariable(eng, buf);			\
-	})
+/* #define get_mat_variable(eng, name, var)			\ */
+/* 	({							\ */
+/* 		char buf[32];					\ */
+/* 		sprintf(buf, "%s%s", #name, orderbookId);	\ */
+/* 		engEvalString(eng, buf */
+/* 		var = *(typeof(var) *)func(mxa);		\ */
+/* 		mxDestroyArray(mxa);				\ */
+/* 	}) */
+
+static char *get_mat_string(const char *matbuf, char *str)
+{
+	const char *cp;
+	char *p;
+	for (cp = matbuf; *cp != '='; cp++);
+	cp++;
+	while (*cp == ' ' || *cp == '\n') cp++;
+	strcpy(str, cp);
+	p = str + strlen(str) - 1;
+	while (*p == '\n' || *p == ' ') *p-- = '\0';
+	return str;
+}
 
 void analyze(void)
 {
@@ -104,115 +119,129 @@ void analyze(void)
 	static Engine *mateng = NULL;
 	struct trade *trade = (struct trade *)
 		g_list_last(market.trades)->data;
-	static int count = 0;
+	char msg[256], matbuf[256], dataspec[256], buffer[512];
+	static unsigned int flags = 0;
 	static int model_fits = 0;
 	int allow_new_positions;
-	char buffer[500];
-	char *msg;
-	FILE *datafile;
-	mxArray *mxa;
 	int l;
+
 #if CURFEW_AFT_5
 	allow_new_positions = strcmp(trade->time, "16:30:00") < 0;
 #else
 	allow_new_positions = 1;
 #endif
 
-	if (strcmp(calibration, "no") == 0)
+	if (!do_trade)
 		return;
 	if (!mateng) {
-		mateng = engOpen(
-			"matlab");
+		mateng = engOpen("matlab");
 		if (!mateng) {
 			fprintf(stderr, "\nCan't start MATLAB engine\n");
 			return;
-		} else
-			engSetVisible(mateng, 0);
+		} else {
+			memset(matbuf, 0, sizeof(matbuf));
+			engOutputBuffer(mateng, matbuf, sizeof(matbuf));
+			/* engSetVisible(mateng, 0); */
+		}
 	}
-	/* fp = fopen(get_filename("positions", ".pos"), "w"); */
-	/* fprintf(fp, "%d\t%d\t%f\t%ld\n", */
-	/* 	my_position.mode, my_position.status, */
-	/* 	my_position.price, my_position.quantity */
-	/* 	); */
-	/* fclose(fp); */
+	sprintf(dataspec, "from %1$s where tid "
+		"<= \"%2$s %3$s\"", get_tbl_name(),
+		todays_date, trade->time);
+	switch (flags) {
+	case 0x00:
+		sprintf(buffer, "mysql%1$s = database('avanza', "
+			"'sinbaski', 'q1w2e3r4', "
+			"'com.mysql.jdbc.Driver', "
+			"'jdbc:mysql://localhost:3306/avanza');",
+			orderbookId);
+		engEvalString(mateng, buffer);
 
-	if (!count) {
 		sprintf(buffer, "spec%1$s = garchset("
 			"'Distribution', 'T', 'Display', 'off','VarianceModel',"
 			" 'GJR', 'P', 1, 'Q', 1, 'R', 1, 'M', 1);",
 			orderbookId);
 		engEvalString(mateng, buffer);
 
-		sprintf(buffer, "[spec%1$s, action%1$s, retcode%1$s, msg%1$s] = analyze("
-			"'%1$s', %2$d, %3$d, %4$f, %5$ld, "
-			"spec%1$s, 0, '%6$s', 0);",
-			orderbookId, my_position.mode,
-			my_position.status, my_position.price,
-			my_position.quantity, calibration);
+	case 0x01: /* fall through! */
+		sprintf(buffer, "data%1$s = fetch(mysql%1$s, "
+			"'select count(*) %2$s order by tid desc "
+			"limit %3$d');data%1$s{1, 1}\n",
+			orderbookId, dataspec, DATA_SIZE);
+		engEvalString(mateng, buffer);
+		sscanf(matbuf, ">> \nans = \n\n    %d", &l);
+		if (l < DATA_SIZE) {
+			flags = 0x01;
+			return;
+		}
+		flags = 0x02;
+		sprintf(buffer, "x%1$s = fetch(mysql%1$s,"
+			"'select price, volume %2$s order by tid desc "
+			"limit %3$d');\n"
+			"data%1$s = flipud(x%1$s);",
+			orderbookId, dataspec, DATA_SIZE);
 		engEvalString(mateng, buffer);
 
-		mxa = get_mat_variable(mateng, retcode);
-		l = *(int8_t *)mxGetData(mxa);
-		mxDestroyArray(mxa);
-		model_fits = l >= 0;
-
-		count++;
-		return;
-
-	}
-	datafile = fopen(get_filename("records", ".dat"), "r");
-	l = fnum_of_line(datafile);
-	fclose(datafile);
-	if (l < MIN_ANALYSIS_SIZE) {
-		sprintf(buffer, "[spec%1$s, action%1$s, retcode%1$s, msg%1$s] "
-			"= analyze('%1$s', %2$d, %3$d, %4$f, %5$ld, "
-			"spec%1$s, %6$d, '%7$s', 0);", orderbookId,
-			my_position.mode, my_position.status,
-			my_position.price, my_position.quantity, model_fits,
-			calibration);
+		sprintf(buffer,
+			"price%1$s = cell2mat(data%1$s(:, 1));\n"
+			"volume%1$s = cell2mat(data%1$s(:, 2));\n"
+			"clear data%1$s;",
+			orderbookId);
 		engEvalString(mateng, buffer);
+		break;
 
-		mxa = get_mat_variable(mateng, spec);
-		mxDestroyArray(mxa);
-
-		mxa = get_mat_variable(mateng, action);
-		mxDestroyArray(mxa);
-
-		mxa = get_mat_variable(mateng, retcode);
-		l = *(int8_t *)mxGetData(mxa);
-		mxDestroyArray(mxa);
-		model_fits = l >= 0;
-
-		mxa = get_mat_variable(mateng, msg);
-		mxDestroyArray(mxa);
-
-		return;
+	case 0x02: {
+		const GList *node =
+			g_list_nth(market.trades, g_list_length(market.trades)
+				   - market.new_trades);
+		int i;
+		sprintf(buffer,
+			"price%1$s = circshift(price%1$s, %2$d);"
+			"volume%1$s = circshift(volume%1$s, %2$d);",
+			orderbookId, -market.new_trades);
+		engEvalString(mateng, buffer);
+		for (i = 0; i < market.new_trades; i++, node = node->next) {
+			const struct trade *trade =
+				(struct trade *)node->data;
+			sprintf(buffer,
+				"price%1$s(%2$d) = %3$f;\n"
+				"volume%1$s(%2$d) = %4$ld;",
+				orderbookId,
+				DATA_SIZE - market.new_trades + i + 1,
+				trade->price, trade->quantity);
+			engEvalString(mateng, buffer);			
+		}
+		break;
+	}
+	default:
+		break;
 	}
 
-	sprintf(buffer, "[spec%1$s, action%1$s, retcode%1$s, msg%1$s] = analyze("
-		"'%1$s', %2$d, %3$d, %4$f, %5$ld, "
-		"spec%1$s, %6$d, '%7$s', 1);", orderbookId, my_position.mode,
-		my_position.status, my_position.price, my_position.quantity,
-		model_fits, calibration);
+	sprintf(buffer, "myposition%1$s = {%2$d, %3$d, %4$f, %5$ld}",
+		orderbookId, my_position.mode, my_position.status,
+		my_position.price, my_position.quantity);
 	engEvalString(mateng, buffer);
 
-	mxa = get_mat_variable(mateng, action);
-	action = *(int8_t *)mxGetData(mxa);
-	mxDestroyArray(mxa);
+	sprintf(buffer,
+		"[spec%1$s, action%1$s, retcode%1$s, msg%1$s] = "
+		"analyze(myposition%1$s, price%1$s, volume%1$s, "
+		"spec%1$s, %2$d, {'%3$s', '%4$s', '%5$s'}, mysql%1$s);",
+		orderbookId, model_fits, todays_date, trade->time,
+		get_tbl_name());
+	engEvalString(mateng, buffer);
+	
+	sprintf(buffer, "[action%1$s retcode%1$s]", orderbookId);
+	engEvalString(mateng, buffer);
+	sscanf(matbuf, ">> \nans = \n\n    %d %d", (int *)&action, &l);
 
-	mxa = get_mat_variable(mateng, msg);
-	msg = mxArrayToString(mxa);
-	mxDestroyArray(mxa);
+	sprintf(buffer, "msg%1$s", orderbookId);
+	engEvalString(mateng, buffer);
+	get_mat_string(matbuf, msg);
 
-	mxa = get_mat_variable(mateng, retcode);
-	l = *(int8_t *)mxGetData(mxa);
-	mxDestroyArray(mxa);
 	model_fits = l >= 0;
 
 	printf("%s; %s; ", msg, action_strings[action]);
-	mxFree(msg);
+	/* mxFree(msg); */
 
-	if (l) goto end;
 	if (action != action_none &&
 	    !(my_position.status == complete && !allow_new_positions)) {
 		if ((status = execute(action)) == order_executed)
@@ -221,7 +250,6 @@ void analyze(void)
 			printf("%s.", status == order_killed ?
 			       "killed" : "failed");
 	}
-end:
 	printf("\n");
 	fflush(stdout);
 }
