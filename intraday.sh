@@ -1,6 +1,6 @@
 #!/bin/bash
 
-stock=(183828 217041 183830 181870)
+stock=(183950 217041 183830 181870)
 
 # 0: buy-and-sell
 # 1: sell-and-buy
@@ -10,10 +10,9 @@ mode=(0 0 0 0)
 price=("0" "0" "0" "0")
 
 # entering quantity
-quantity=(730 830 1358 1054)
+quantity=(1000 830 1358 1054)
 
-# The data to use for calibration
-calibration=(2012-03-19 2012-03-19 2012-03-19 2012-03-19)
+do_trade=(1 1 1 1)
 
 status=(0 0 0 0)
 
@@ -52,16 +51,20 @@ fi
 
 # start_trading
 command="$1"
-
 case $command in
 start)
-	if [ -n "$2" ]; then
+	if [ -n "$2" -a -z "$3" ]; then
+	    echo You also need to specify a date.
+	    exit -1;
+	elif [ -n "$2" ]; then
+	    day=$3
 	    for ((i=0; i<${#stock[@]}; i++)); do
 		if [ "${stock[$i]}" != "$2" ]; then
 		    continue;
 		fi
 		./intraday -s ${stock[$i]} -m ${mode[$i]} -t ${status[$i]} \
-		    -q ${quantity[$i]} -p ${price[$i]} -c ${calibration[$i]} &
+		    -q ${quantity[$i]} -p ${price[$i]} -w ${do_trade[$i]} \
+		    -d $day &
 		break;
 	    done
 	    exit 0;
@@ -73,7 +76,8 @@ start)
 		continue;
 	    else
 		./intraday -s ${stock[$i]} -m ${mode[$i]} -t ${status[$i]} \
-		    -q ${quantity[$i]} -p ${price[$i]} -c ${calibration[$i]} &
+		    -q ${quantity[$i]} -p ${price[$i]} -w ${do_trade[$i]} \
+		    -d `date +%F` &
 	    fi
 	done
 	if [ `pgrep -c alarm.sh` -eq 0 ]; then
