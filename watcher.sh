@@ -14,12 +14,8 @@ if [ -z "$LD_LIBRARY_PATH" ]; then
     export PATH
 fi
 
-stocks=(183950 217041 183830 181870)
 while test 1; do
-    for ((i=0; i<${#stocks[@]}; i++)); do
-	stock=${stocks[$i]};
-	echo "working on $stock."
-
+    while read stock && [ -n "$stock" ]; do
 	log="./logs/$stock-"
 	log+=`date +%F`
 	log+=".log"
@@ -27,19 +23,19 @@ while test 1; do
 	file="watcher-$stock"
 	if [ ! -f $file ]; then
 	    echo "[`date +%H:%M:%S`] starting $stock..."
-	    ./intraday.sh start $stock `date +%F`
+	    ./intraday.sh start $stock
 	elif ps -C intraday -o cmd= | grep -q $stock; then
 	    x="`stat -c %Y $file`"
 	    y="`date +%s`"
 	    if [ $(($y - $x)) -gt 310 ]; then
 		echo "[`date +%H:%M:%S`] restarting $stock"
 		./intraday.sh stop $stock
-		./intraday.sh start $stock `date +%F`
+		./intraday.sh start $stock
 	    fi
 	else
 	    echo "[`date +%H:%M:%S`] starting $stock..."
-	    ./intraday.sh start $stock `date +%F`
+	    ./intraday.sh start $stock
 	fi
-    done
+    done < stocks.txt
     sleep 310
 done &

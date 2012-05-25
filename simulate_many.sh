@@ -7,30 +7,19 @@
 price=0;
 status=0;
 
-# function update {
-#     local i x p;
-#     for ((i=0; i<${#status[@]}; i++)); do
-# 	x="$x ${status[$i]}"
-# 	p="$p ${price[$i]}"
-#     done
-#     sed -i -e "s/status=(.*)/status=($x)/g" intraday.sh
-#     sed -i -e "s/price=(.*)/price=($p)/g" intraday.sh
-#     echo intraday.sh updated.
-# }
-
 stock=$1
 if [ -f $stock.txt ]; then
     rm $stock.txt
 fi
-echo "select dataid from company where name=\"$stock\"" |
-mysql --skip-column-names --user=sinbaski --password=q1w2e3r4 \
-    avanza > /tmp/tmp.txt
+echo "select dataid from company where name=\"$stock\"" | \
+    mysql --skip-column-names --user=sinbaski --password=q1w2e3r4 avanza > \
+    /tmp/tmp.txt
 read dataid < /tmp/tmp.txt
 
 while read x && test -n "$x"; do
     echo "$stock-$x to be simulated."
     day=$x;
-    echo -s $dataid -m 0 -t $status -p $price -q 1200 -w 1 -d $day > /tmp/tmp.txt
+    echo -s $dataid -m 0 -t $status -p $price -q 1200 -w 1 -n 1 -d $day > /tmp/tmp.txt
     if ! ./simulate.sh sim $stock $dataid $day; then
 	exit $?
     fi

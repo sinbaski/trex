@@ -1,26 +1,27 @@
 #!/bin/bash
 
-stock=(183950 217041 183830 181870)
-
-# 0: buy-and-sell
-# 1: sell-and-buy
-mode=(0 0 0 0)
-
-#entering price
-price=("0" "0" "0" "0")
-
-# entering quantity
-quantity=(1000 830 1358 1054)
-
-do_trade=(1 1 1 1)
-
-status=(0 0 0 0)
-
 wd=/home/xxie/work/avanza/data_extract/intraday
+allow_new_entry=1;
 
-# function start_trading {
-#     ./intraday -s $1 -m $2 -t $3 -q $4 -p $5 -c $6 -t $7
-# }
+function start_trading {
+    echo select my_mode, my_status, my_price, my_quantity, do_trade \
+	from company where dataid=$1 | mysql --skip-column-names \
+	--user=sinbaski --password=q1w2e3r4 avanza > \
+	/tmp/intraday-$1.txt
+    if [ ! -s /tmp/intraday-$1.txt ]; then
+	echo Unknown stock $1
+	exit -1
+    fi
+    mode=`cut -f 1 /tmp/intraday-$1.txt`;
+    status=`cut -f 2 /tmp/intraday-$1.txt`;
+    price=`cut -f 3 /tmp/intraday-$1.txt`;
+    quantity=`cut -f 4 /tmp/intraday-$1.txt`;
+    do_trade=`cut -f 5 /tmp/intraday-$1.txt`;
+    ./intraday -s $1 -m $mode -t $status \
+    	-q $quantity -p $price -w $do_trade \
+    	-n $allow_new_entry -d `date +%F` &
+    rm /tmp/intraday-$1.txt
+}
 
 function stop_trading {
     pid=`ps -C intraday -o pid=,cmd= | grep $1 | grep -o '^ *[0-9]\+'`
@@ -33,6 +34,25 @@ function stop_trading {
     while ps -C intraday -o pid= | grep -q $pid; do
 	sleep 3
     done
+    #update the status of trading
+    fname=`date +%F`
+    fname="transactions/$1-$fname.txt"
+    last_line=`grep executed $fname | tail -n 1`;
+    if [ -z "$last_line" ]; then
+	return 0;
+    fi
+    action=`echo "$last_line" | grep -o -E "BUY|SELL"`;
+    price=`echo "$last_line" | sed -e "s/.*price=\([0-9.]\+\).*/\1/g"`;
+    mode=`echo select my_mode from company where dataid=$1 | \
+	mysql --skip-column-names --user=sinbaski --password=q1w2e3r4 avanza`;
+    if [ "$mode" = "0" -a "$action" = "SELL" -o \
+	"$mode" = "1" -a "$action" = "BUY" ]; then
+	echo "update company set my_status=0, my_price=0 where dataid=$1" | \
+	    mysql --skip-column-names --user=sinbaski --password=q1w2e3r4 avanza
+    else
+	echo "update company set my_status=1, my_price=$price where dataid=$1" | \
+	    mysql --skip-column-names --user=sinbaski --password=q1w2e3r4 avanza
+    fi
     return 0
 }
 
@@ -53,55 +73,29 @@ fi
 command="$1"
 case $command in
 start)
-	if [ -n "$2" -a -z "$3" ]; then
-	    echo You also need to specify a date.
-	    exit -1;
-	elif [ -n "$2" ]; then
-	    day=$3
-	    for ((i=0; i<${#stock[@]}; i++)); do
-		if [ "${stock[$i]}" != "$2" ]; then
-		    continue;
-		fi
-		./intraday -s ${stock[$i]} -m ${mode[$i]} -t ${status[$i]} \
-		    -q ${quantity[$i]} -p ${price[$i]} -w ${do_trade[$i]} \
-		    -d $day &
-		break;
-	    done
+	if [ -n "$2" ]; then
+	    start_trading $2;
 	    exit 0;
 	fi
 	
-	for ((i=0; i<${#stock[@]}; i++)); do
-	    if ps -C intraday -o cmd= | grep -q ${stock[$i]}; then
-		echo "${stock[$i]} Already running."
+	while read stock && [ -n "$stock" ]; do
+	    if ps -C intraday -o cmd= | grep -q $stock; then
+		echo "$stock Already running."
 		continue;
 	    else
-		./intraday -s ${stock[$i]} -m ${mode[$i]} -t ${status[$i]} \
-		    -q ${quantity[$i]} -p ${price[$i]} -w ${do_trade[$i]} \
-		    -d `date +%F` &
+		start_trading $stock
 	    fi
-	done
-	if [ `pgrep -c alarm.sh` -eq 0 ]; then
-	    ./alarm.sh &
-	fi
+	done < stocks.txt
 	;;
 stop)
 	if [ -n "$2" ]; then
-	    for ((i=0; i<${#stock[@]}; i++)); do
-		if [ "${stock[$i]}" != "$2" ]; then
-		    continue;
-		fi
-		stop_trading ${stock[$i]}
-		break;
-	    done
+	    stop_trading $2
 	    exit 0;
 	fi
 	
-	for ((i=0; i<${#stock[@]}; i++)); do
-	    stop_trading ${stock[$i]}
-	done
-	if [ `pgrep -c intraday` -eq 0 ]; then
-	    killall alarm.sh &> /tmp/null
-	fi
+	while read stock && [ -n "$stock" ]; do
+	    stop_trading $stock
+	done < stocks.txt
 	;;
 *)
 	echo "Unknown command \"$command\""

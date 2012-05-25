@@ -21,13 +21,6 @@ case $cmd in
 	    exit -1;
 	fi
 	day="$4"
-	# if [ -f temp/$stock-$day.txt ]; then
-	#     if [ `find . -name "$stock-$day.*" | grep -v temp | wc -l` -ne 0 ]; then
-	# 	find . -name "$stock-$day.*" | grep -v temp | xargs rm
-	#     fi
-	# else
-	#     mv $(find . -name "$stock-$day.*" | grep -v temp) temp
-	# fi
 	rm -f $(find . -name $stock-$day.*)
 	if grep -q -e '-t 1 -p 0' /tmp/tmp.txt; then
 	    echo -n "Incorrect options: "
@@ -38,9 +31,5 @@ case $cmd in
 	fakesource/fakesource $sname $day &
 	echo "$opt"
 	./intraday $opt
-	# while [ -n "`ps -C fakesource -o pid=`" ]; do
-	#     sleep 1
-	# done
-	# ./intraday.sh stop $stock
 	echo Simulation is complete.
 esac
