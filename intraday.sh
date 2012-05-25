@@ -1,10 +1,9 @@
 #!/bin/bash
 
 wd=/home/xxie/work/avanza/data_extract/intraday
-allow_new_entry=1;
 
 function start_trading {
-    echo select my_mode, my_status, my_price, my_quantity, do_trade \
+    echo select my_mode, my_status, my_price, my_quantity \
 	from company where dataid=$1 | mysql --skip-column-names \
 	--user=sinbaski --password=q1w2e3r4 avanza > \
 	/tmp/intraday-$1.txt
@@ -16,10 +15,12 @@ function start_trading {
     status=`cut -f 2 /tmp/intraday-$1.txt`;
     price=`cut -f 3 /tmp/intraday-$1.txt`;
     quantity=`cut -f 4 /tmp/intraday-$1.txt`;
-    do_trade=`cut -f 5 /tmp/intraday-$1.txt`;
+    # do_trade=`cut -f 5 /tmp/intraday-$1.txt`;
+    do_trade=$2;
+    allow_new=$3;
     ./intraday -s $1 -m $mode -t $status \
     	-q $quantity -p $price -w $do_trade \
-    	-n $allow_new_entry -d `date +%F` &
+    	-n $allow_new -d `date +%F` &
     rm /tmp/intraday-$1.txt
 }
 
@@ -58,44 +59,46 @@ function stop_trading {
 
 if [ "$wd" != `pwd` ]; then cd $wd; fi
 
-for dir in transactions records logs; do
+for dir in transactions logs; do
     if [ ! -d $dir ]; then
 	mkdir $dir
     fi
 done
 
-if [ -z "$1" ]; then
-    echo "Usage: $0 COMMAND" 1>&2
-    exit -1
+if [ $# -lt 4 ]; then
+    echo Only $# arguments while 4 is needed.
+    exit 1
 fi
 
 # start_trading
 command="$1"
 case $command in
 start)
-	if [ -n "$2" ]; then
-	    start_trading $2;
-	    exit 0;
-	fi
+	start_trading $2 $3 $4
+	# if [ -n "$2" ]; then
+	#     start_trading $2 $3 $4
+	#     exit 0;
+	# fi
 	
-	while read stock && [ -n "$stock" ]; do
-	    if ps -C intraday -o cmd= | grep -q $stock; then
-		echo "$stock Already running."
-		continue;
-	    else
-		start_trading $stock
-	    fi
-	done < stocks.txt
+	# while read stock && [ -n "$stock" ]; do
+	#     if ps -C intraday -o cmd= | grep -q $stock; then
+	# 	echo "$stock Already running."
+	# 	continue;
+	#     else
+	# 	start_trading $stock
+	#     fi
+	# done < stocks.txt
 	;;
 stop)
-	if [ -n "$2" ]; then
-	    stop_trading $2
-	    exit 0;
-	fi
+	stop_trading $2
+	# if [ -n "$2" ]; then
+	#     stop_trading $2
+	#     exit 0;
+	# fi
 	
-	while read stock && [ -n "$stock" ]; do
-	    stop_trading $stock
-	done < stocks.txt
+	# while read stock && [ -n "$stock" ]; do
+	#     stop_trading $stock
+	# done < stocks.txt
 	;;
 *)
 	echo "Unknown command \"$command\""

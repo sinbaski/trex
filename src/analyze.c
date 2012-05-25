@@ -40,20 +40,34 @@ static enum order_status execute(enum action_type action)
 {
 	struct trade *trade = (struct trade *)g_list_last(market.trades)->data;
 	double price = trade->price;
+	double cash;
 	enum order_status status;
 	int trials = 3;
 	const int limtime = 20, delay = 5;
 	time_t t1, t2;
+	FILE *pot;
 	time(&t1);
+
+	pot = fopen("pot.txt", "r+");
+	flockfile(pot);
 
 	switch (my_position.mode << 2 | my_position.status << 1 | action) {
 	case 0b000: /*buy-and-sell, complete, buy */
+		fscanf(pot, "%lf", &cash);
+		if (cash < price * my_position.quantity) {
+			printf(" %s: insufficient cash.\n", __func__);
+			break;
+		}
 	case 0b101: /*sell-and-buy, complete, sell */
 		do {
 			if ((status = send_order(action)) == order_executed) {
 				my_position.status = incomplete;
 				my_position.price = price;
 				strcpy(my_position.time, get_timestring());
+				if (my_position.mode == 0)
+					cash -= price * my_position.quantity;
+				else
+					cash += price * my_position.quantity;
 			} else {
 				time(&t2);
 				if (--trials) {
@@ -72,11 +86,20 @@ static enum order_status execute(enum action_type action)
 	case 0b111: /*sell-and-buy, incomplete, sell */
 		printf(" %s: Rejected.\n", __func__);
 		break;
-	case 0b011: /*buy-and-sell, incomplete, sell */
 	case 0b110: /*sell-and-buy, incomplete, buy */
+		fscanf(pot, "%lf", &cash);
+		if (cash < price * my_position.quantity) {
+			printf(" %s: insufficient cash.\n", __func__);
+			break;
+		}
+	case 0b011: /*buy-and-sell, incomplete, sell */
 		do {
 			if ((status = send_order(action)) == order_executed) {
 				my_position.status = complete;
+				if (my_position.mode == 0)
+					cash += price * my_position.quantity;
+				else
+					cash -= price * my_position.quantity;
 			} else {
 				time(&t2);
 				if (--trials) {
@@ -89,6 +112,9 @@ static enum order_status execute(enum action_type action)
 			}
 		} while (status != order_executed && trials);
 	}
+	fprintf(pot, "%f\n", cash);
+	funlockfile(pot);
+	fclose(pot);
 	return status;
 }
 
