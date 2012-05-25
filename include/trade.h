@@ -13,7 +13,7 @@
 		if (!g_str_has_suffix(dir, "/"))			\
 			filename[strlen(dir)] = '/';			\
 		sprintf(filename + strlen(filename), "%s-%s",		\
-			orderbookId,					\
+			stockinfo.dataid,					\
 			todays_date);					\
 		if (!g_str_has_prefix(ext, "."))			\
 			filename[strlen(filename)] = '.';		\

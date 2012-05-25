@@ -85,24 +85,30 @@ struct trade_position {
 	enum trade_mode mode;
 	enum trade_status status;
 	double price;
-	/* The number of shares we trade */
 	long quantity;
+	char time[9];
 };
 
 struct stock_info {
-	const char *name;
-	const char *dataid;
-	const char *orderid;
+	char name[65];
+	char tbl_name[65];
+	/* dataid is the orderbookId */
+	char dataid[7];
+	char orderid[7];
+};
+
+struct trade_flags {
+	int do_trade:1;
+	int allow_new_entry:1;
 };
 
 extern struct trade_position my_position;
+extern struct trade_flags my_flags;
 extern struct market market;
 extern enum trade_status enter_status;
-extern char orderbookId[20];
-extern int do_trade;
+extern struct stock_info stockinfo;
 extern char todays_date[11];
 extern MYSQL *mysqldb;
-extern const struct stock_info stockinfo[];
 extern struct trade_const trade_constants;
 
 int inline indicators_initialized(void);
@@ -116,18 +122,5 @@ void set_position(const struct trade_position *position);
 void discard_old_records(int size);
 void analyze(void);
 void analyzer_cleanup(void);
-const struct stock_info *get_stock_info(const char *id);
-
-#define get_tbl_name()							\
-	({								\
-		int i;							\
-		char tbl_name[50];					\
-		const struct stock_info *info = get_stock_info(orderbookId); \
-		strncpy(tbl_name, info->name, sizeof(tbl_name));	\
-		for (i = 0; i < sizeof(tbl_name); i++) {		\
-			if (tbl_name[i] == ' ') tbl_name[i] = '_';	\
-		}							\
-		tbl_name;						\
-	})
-
+struct stock_info *get_stock_info(const char *id, struct stock_info *);
 #endif

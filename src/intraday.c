@@ -39,39 +39,12 @@ struct connection {
 	.valid = 0
 };
 
-const struct stock_info stockinfo[] = {
-	/* { */
-	/* 	"Boliden", */
-	/* 	"183828", */
-	/* 	"5564" */
-	/* }, */
-	{
-		"Securitas B",
-		"183950",
-		"5270"
-	},
-	{
-		"Alliance Oil Company SDB",
-		"217041",
-		"81447"
-	},
-	{
-		"Nordea Bank",
-		"183830",
-		"5249"
-	},
-	{
-		"Ericsson B",
-		"181870",
-		"5240"
-	}
-};
+struct stock_info stockinfo;
 
-char orderbookId[20];
 char todays_date[11];
 MYSQL *mysqldb;
 /* A date string indicating the data used for calibration */
-int do_trade;
+struct trade_flags my_flags;
 volatile enum status my_status;
 
 #if DAEMONIZE
@@ -118,15 +91,32 @@ static void declare(const char *str)
 	return;
 }
 
-const struct stock_info *get_stock_info(const char *id)
+struct stock_info *get_stock_info(const char *id, struct stock_info *info)
 {
-	int i;
-	for (i = 0; i < ARRAY_SIZE(stockinfo); i++) {
-		if (strcmp(stockinfo[i].dataid, id) == 0) {
-			return stockinfo + i;
-		}
+	MYSQL_RES *res;
+	MYSQL_ROW row;
+	char stmt[128], *p;
+
+	assert(info != NULL);
+	sprintf(stmt, "select name, orderid from company "
+		"where dataid=\"%s\";", id);
+	if (mysql_query(mysqldb, stmt)) {
+		fprintf(stderr, "mysql error: %s\n", mysql_error(mysqldb));
+		return NULL;
 	}
-	return NULL;
+	res = mysql_store_result(mysqldb);
+	row = mysql_fetch_row(res);
+	strcpy(info->name, row[0]);
+	strcpy(info->tbl_name, row[0]);
+	strcpy(info->orderid, row[1]);
+	if (info->dataid != id)
+		strcpy(info->dataid, id);
+	mysql_free_result(res);
+
+	for (p = info->name; *p != '\0'; p++) {
+		*p = *p == '_' ? ' ' : *p;
+	}
+	return info;
 }
 
 time_t get_trade(MYSQL *db, long n, struct trade *trade1)
@@ -135,20 +125,13 @@ time_t get_trade(MYSQL *db, long n, struct trade *trade1)
 	struct trade trade2;
 	struct trade *trade = trade1 ? trade1 : &trade2;
 
-	/* assert(n >= 0 && n < fnum_of_line(datafile)); */
-	/* fseek(datafile, n * DATA_ROW_WIDTH, SEEK_SET); */
-	/* fscanf(datafile, "%s\t%s\t%lf\t%ld", */
-	/*        trade->market, trade->time, &trade->price, */
-	/*        &trade->quantity); */
-	/* fseek(datafile, offset, SEEK_SET); */
 	MYSQL_RES *res;
 	MYSQL_ROW row;
-	GString *gstr = g_string_sized_new(128);
-
-	g_string_printf(gstr, "select price, volume, time(tid) from %s "
+	char stmt[128];
+	sprintf(stmt, "select price, volume, time(tid) from %s "
 			"where tid like '%s %%' order by tid desc limit %ld, 1;",
-			get_tbl_name(), todays_date, n);
-	if (mysql_query(mysqldb, gstr->str)) {
+			stockinfo.tbl_name, todays_date, n);
+	if (mysql_query(mysqldb, stmt)) {
 		fprintf(stderr, "mysql error: %s\n", mysql_error(mysqldb));
 		return 0;
 	}
@@ -182,13 +165,13 @@ int get_num_records(const char *date)
 {
 	MYSQL_RES *res;
 	MYSQL_ROW row;
-	const char *tbl_name = get_tbl_name();
-	GString *gstr = g_string_sized_new(128);
+	const char *tbl_name = stockinfo.tbl_name;
+	char stmt[128];
 	int num_rows;
 
-	g_string_printf(gstr, "select count(*) from %s "
+	sprintf(stmt, "select count(*) from %s "
 			"where tid like '%s %%';", tbl_name, date);
-	if (mysql_query(mysqldb, gstr->str)) {
+	if (mysql_query(mysqldb, stmt)) {
 		fprintf(stderr, "mysql error: %s\n", mysql_error(mysqldb));
 		return -1;
 	}
@@ -218,7 +201,7 @@ static int log_data(int idx)
 			get_trade(mysqldb, 0, &last);
 	}
 	/* datafile = fopen(get_filename("records", ".dat"), "a"); */
-	g_string_printf(gstr, "insert into %s values ", get_tbl_name());
+	g_string_printf(gstr, "insert into %s values ", stockinfo.tbl_name);
 	n = 0;
 	while (node) {
 		const struct trade *trade =
@@ -510,7 +493,6 @@ static long get_hld_qtt(void)
 	GRegex *regex;
 	GError *error = NULL;
 	char buffer[1024];
-	const struct stock_info *info = get_stock_info(orderbookId);
 	GMatchInfo *match_info;
 	/* If no match is found, we have 0 shares. */
 	long n = 0;
@@ -547,7 +529,7 @@ static long get_hld_qtt(void)
 	fseek(fp, 0, SEEK_SET);
 	sprintf(buffer, ">%s</a></td><td +valign=\"bottom\" +"
 		"class=\"neutral\"><nobr>([0-9]+)</nobr></td>",
-		info->name);
+		stockinfo.name);
 	regex = g_regex_new(buffer, 0, 0, &error);
 	while (fgets(buffer, sizeof(buffer), fp)) {
 		gchar *str;
@@ -568,7 +550,7 @@ static inline void update_watcher(void)
 {
 	char buf[20];
 	FILE *fp;
-	sprintf(buf, "watcher-%s", orderbookId);
+	sprintf(buf, "watcher-%s", stockinfo.dataid);
 	fp = fopen(buf, "w");
 	fprintf(fp, "Active\n");
 	fclose(fp);
@@ -586,9 +568,6 @@ static void collect_data(void)
 	char message[10];
 #endif
 	/* The number of shares that we have on the account */
-#if REAL_TRADE
-	long hld_qtt;
-#endif
 	regex = g_regex_new("^<TR.*><TD.*>[^<]*</TD>"
 			    "<TD.*>[^<]*</TD>"
 			    "<TD.*>([A-Z]+)</TD>"
@@ -599,7 +578,7 @@ static void collect_data(void)
 	update_watcher();
 	prepare_connection();
 
-	sprintf(xchgfile, "./intraday-%s.html", orderbookId);
+	sprintf(xchgfile, "./intraday-%s.html", stockinfo.dataid);
 	if (get_status(&my_position.status, &my_position.price) != 0)
 		return;
 	for (i = 0; g_atomic_int_get(&my_status) == collecting; i = 1) {
@@ -621,12 +600,12 @@ static void collect_data(void)
 		g_string_printf(gstr, "https://www.avanza.se/aza/"
 				"aktieroptioner/kurslistor/"
 				"avslut.jsp?&orderbookId=%s",
-				orderbookId);
+				stockinfo.dataid);
 		curl_easy_setopt(conn.handle, CURLOPT_URL, gstr->str);
 		g_string_printf(gstr, "https://www.avanza.se/aza/"
 				"aktieroptioner/kurslistor/"
 				"aktie.jsp?&orderbookId=%s",
-				orderbookId);
+				stockinfo.dataid);
 		curl_easy_setopt(conn.handle, CURLOPT_REFERER, gstr->str);
 		if (perform_request()) {
 			fclose(fp);
@@ -683,17 +662,17 @@ static void collect_data(void)
 		fclose(req);
 	}
 #endif
+	analyzer_cleanup();
 }
 
 #if REAL_TRADE
 static int check_aktuella(FILE *fp, long m, long n, enum action_type action,
 			  char buffer[], int size)
 {
-	const struct stock_info *info = get_stock_info(orderbookId);
 	int ret = 0;
 	fseek(fp, m, SEEK_SET);
 	while (!ret && ftell(fp) < n && fgets(buffer, size, fp)) {
-		if (strstr(buffer, info->name)) ret = 1;
+		if (strstr(buffer, stockinfo.name)) ret = 1;
 	}
 	return ret;
 }
@@ -701,7 +680,6 @@ static int check_aktuella(FILE *fp, long m, long n, enum action_type action,
 static int check_avslut(FILE *fp, long n, enum action_type action,
 			char *buffer, int size)
 {
-	const struct stock_info *info = get_stock_info(orderbookId);
 	int ret = 0;
 	int done = 0;
 	int s;
@@ -726,7 +704,7 @@ static int check_avslut(FILE *fp, long n, enum action_type action,
 			} else if (strstr(buffer, ">S&auml;lj</td>") ||
 				   strstr(buffer, ">S\344lj</td>")) {
 				executed = action_sell;
-			} else if (strstr(buffer, info->name)) {
+			} else if (strstr(buffer, stockinfo.name)) {
 				done = 1;
 				ret = action == executed;
 			} else if (strstr(buffer, "</tr>")) {
@@ -802,7 +780,6 @@ static enum order_status get_order_status(enum action_type action)
 
 enum order_status send_order(enum action_type action)
 {
-	const struct stock_info *info = get_stock_info(orderbookId);
 	struct trade *trade = (struct trade *)g_list_last(market.trades)->data;
 	char buffer[1024];
 	enum order_status ret;
@@ -819,7 +796,6 @@ enum order_status send_order(enum action_type action)
 	CURLcode err;
 	const char *orderurl = "https://www.avanza.se/aza"
 		"/order/aktie/kopsalj.jsp";
-	assert(info != NULL);
 	refresh_conn();
 	fp = fopen("./OrderResponse.html", "w");
 	fp1 = fopen("./OrderResponse.txt", "w");
@@ -835,8 +811,8 @@ enum order_status send_order(enum action_type action)
 		"searchString=%s&transitionId=%s&commit=true&contractSize=1.0&"
 		"market=INET&currency=SEK&currencyRate=1.0&countryCode=SE&"
 		"orderType=%s&priceMultiplier=1.0&popped=false\n",
-		info->orderid, my_position.quantity, gstr->str, get_datestring(),
-		actionstr, actionstr, info->name,
+		stockinfo.orderid, my_position.quantity, gstr->str, get_datestring(),
+		actionstr, actionstr, stockinfo.name,
 		action == action_buy ? "21" : "31", actionstr
 		);
 	curl_easy_setopt(conn.handle, CURLOPT_COPYPOSTFIELDS, buffer);
@@ -862,7 +838,7 @@ enum order_status send_order(enum action_type action)
 		buffer,
 		/* "%s to %s %s at %s kronor.\n", */
 		"The order to %s %s at %s is %s.\n",
-		actionstr, info->name, gstr->str, statusstr[ret]);
+		actionstr, stockinfo.name, gstr->str, statusstr[ret]);
 	g_string_free(gstr, TRUE);
 	declare(buffer);
 	return ret;
@@ -904,10 +880,11 @@ int main(int argc, char *argv[])
 	int i;
 	int opt;
 	memset(&my_position, 0, sizeof(my_position));
-	while ((opt = getopt(argc, argv, "s:m:p:q:w:t:d:")) != -1) {
+	memset(&my_flags, 0, sizeof(my_flags));
+	while ((opt = getopt(argc, argv, "s:m:p:q:w:t:d:n:")) != -1) {
                switch (opt) {
                case 's':
-		       sscanf(optarg, "%s", orderbookId);
+		       strcpy(stockinfo.dataid, optarg);
 		       break;
 	       case 'm':
 		       sscanf(optarg, "%d", (int *)&my_position.mode);
@@ -919,14 +896,21 @@ int main(int argc, char *argv[])
 		       sscanf(optarg, "%ld", &my_position.quantity);
 		       break;
 	       case 'w':
-		       sscanf(optarg, "%d", &do_trade);
+		       sscanf(optarg, "%d", &i);
+		       my_flags.do_trade = i;
 		       break;
 	       case 't':
 		       sscanf(optarg, "%d", (int *)&my_position.status);
+		       if (my_position.status == 1)
+			       strcpy(my_position.time, "00:00:01");
 		       break;
 	       case 'd':
-		       sscanf(optarg, "%s", todays_date);
+		       strcpy(todays_date, optarg);
 		       break;
+	       case 'n':
+		       sscanf(optarg, "%d", &i);
+		       my_flags.allow_new_entry = i;
+		       break;		       
                default: /* '?' */
                    fprintf(stderr, "Usage: %s -s stock -m mode "
 			   "-q quantity [-p enter_price]\n",
@@ -935,7 +919,7 @@ int main(int argc, char *argv[])
                }
 	}
 	enter_status = my_position.status;
-	if (strlen(orderbookId) == 0 || my_position.quantity == 0) {
+	if (strlen(stockinfo.dataid) == 0 || my_position.quantity == 0) {
                    fprintf(stderr, "Usage: %s [-s stock] [-m] mode "
 			   "[-p] enter_price -q quantity\n",
                            argv[0]);
@@ -961,6 +945,7 @@ int main(int argc, char *argv[])
 		goto end1;
 	}
 	mysql_autocommit(mysqldb, 1);
+	get_stock_info(stockinfo.dataid, &stockinfo);
 	collect_data();
 	mysql_close(mysqldb);
 end1:
