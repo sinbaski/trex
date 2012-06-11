@@ -8,18 +8,31 @@ price=0;
 status=0;
 
 stock=$1
+
+quantity=
 if [ -f $stock.txt ]; then
     rm $stock.txt
 fi
-echo "select dataid from company where name=\"$stock\"" | \
+
+echo "select dataid, my_quantity from company where name=\"$stock\"" | \
     mysql --skip-column-names --user=sinbaski --password=q1w2e3r4 avanza > \
     /tmp/tmp.txt
-read dataid < /tmp/tmp.txt
 
+dataid=`cat /tmp/tmp.txt | awk '{print $1}'`;
+quantity=`cat /tmp/tmp.txt | awk '{print $2}'`;
+
+if [ -f ./pot.txt ]; then
+    mv ./pot.txt /tmp
+fi
+echo 200000 > pot.txt
+
+if [ -f $stock.txt ]; then
+    mv $stock.txt temp
+fi
 while read x && test -n "$x"; do
     echo "$stock-$x to be simulated."
     day=$x;
-    echo -s $dataid -m 0 -t $status -p $price -q 1200 -w 1 -n 1 -d $day > /tmp/tmp.txt
+    echo -s $dataid -m 0 -t $status -p $price -q $quantity -w 1 -n 1 -d $day > /tmp/tmp.txt
     if ! ./simulate.sh sim $stock $dataid $day; then
 	exit $?
     fi
@@ -39,3 +52,4 @@ while read x && test -n "$x"; do
     echo -n "status=$status "
     echo "price=$price"
 done
+mv /tmp/pot.txt .
