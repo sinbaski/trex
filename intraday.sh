@@ -65,40 +65,33 @@ for dir in transactions logs; do
     fi
 done
 
-if [ $# -lt 4 ]; then
-    echo Only $# arguments while 4 is needed.
-    exit 1
+if [ $# -lt 1 ]; then
+    echo Usage: $0 start/stop [stock_id]
+    exit 0
 fi
 
-# start_trading
 command="$1"
 case $command in
 start)
+	if [ $# -lt 4 ]; then
+	    echo Only $# arguments while 4 is needed.
+	    exit 1
+	fi
+
 	start_trading $2 $3 $4
-	# if [ -n "$2" ]; then
-	#     start_trading $2 $3 $4
-	#     exit 0;
-	# fi
-	
-	# while read stock && [ -n "$stock" ]; do
-	#     if ps -C intraday -o cmd= | grep -q $stock; then
-	# 	echo "$stock Already running."
-	# 	continue;
-	#     else
-	# 	start_trading $stock
-	#     fi
-	# done < stocks.txt
 	;;
 stop)
-	stop_trading $2
-	# if [ -n "$2" ]; then
-	#     stop_trading $2
-	#     exit 0;
-	# fi
-	
-	# while read stock && [ -n "$stock" ]; do
-	#     stop_trading $stock
-	# done < stocks.txt
+	if [ $# -eq 2 ]; then
+	    stop_trading $2
+	elif [ $# -eq 1 ]; then
+	    while read line; do
+		if [ -z "$line" ] || [ ${line:0:1} == "#" ]; then
+		    continue;
+		fi
+		stock=`echo "$line" | awk '{print $1}'`;
+		stop_trading $stock
+	    done < stocks.conf
+	fi
 	;;
 *)
 	echo "Unknown command \"$command\""
