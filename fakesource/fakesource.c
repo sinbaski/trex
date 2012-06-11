@@ -57,13 +57,26 @@ int get_real_trade(struct trade *trade, FILE *datafile)
 static void output_record(FILE *fp, const struct trade *trade)
 {
 	int l, m;
+	char *p;
+#define rowsize 100
+	static int n = 0;
+	static char buffer[BATCH_SIZE * rowsize];
+	if (n == 0)
+		memset(buffer, rowsize * BATCH_SIZE, 0);
+	p = buffer + n * rowsize;
 	l = (int)floor(trade->price);
 	m = (int)((trade->price - l) * 100);
-	fprintf(fp, "<TR><TD>ABC</TD><TD>CBA</TD><TD>%s</TD>",
-		trade->market);
-	fprintf(fp, "<TD>%s</TD>", trade->time);
-	fprintf(fp, "<TD>%d,%02d</TD>", l, m);
-	fprintf(fp, "<TD>%ld</TD></TR>\n", trade->quantity);
+	sprintf(p, "<TR><TD>ABC</TD><TD>CBA</TD><TD>%s</TD>"
+		"<TD>%s</TD><TD>%d,%02d</TD><TD>%ld</TD></TR>\n",
+		trade->market, trade->time, l, m, trade->quantity);
+	n++;
+
+	if (n == BATCH_SIZE) {
+		int i;
+		for (i = BATCH_SIZE; i > 0;)
+			fprintf(fp, "%s", buffer + --i * rowsize);
+		n = 0;
+	}
 }
 
 int main (int argc, char *argv[])
@@ -163,9 +176,9 @@ int main (int argc, char *argv[])
 
 		resp = fopen("./resp-fifo", "w");
 		if (!done)
-			fprintf(resp, "ready");
+			fprintf(resp, "ready\n");
 		else
-			fprintf(resp, "done");
+			fprintf(resp, "done\n");
 		fclose(resp);
 	} while(!done);
 	if (strcmp(tbl_name, "fake") != 0) {
