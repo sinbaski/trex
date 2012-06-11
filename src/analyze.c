@@ -41,7 +41,7 @@ static enum order_status execute(enum action_type action)
 	struct trade *trade = (struct trade *)g_list_last(market.trades)->data;
 	double price = trade->price;
 	double cash;
-	enum order_status status;
+	enum order_status status = order_failed;
 	int trials = 3;
 	const int limtime = 20, delay = 5;
 	time_t t1, t2;
@@ -50,10 +50,9 @@ static enum order_status execute(enum action_type action)
 
 	pot = fopen("pot.txt", "r+");
 	flockfile(pot);
-
+	fscanf(pot, "%lf", &cash);
 	switch (my_position.mode << 2 | my_position.status << 1 | action) {
 	case 0b000: /*buy-and-sell, complete, buy */
-		fscanf(pot, "%lf", &cash);
 		if (cash < price * my_position.quantity) {
 			printf(" %s: insufficient cash.\n", __func__);
 			break;
@@ -87,9 +86,8 @@ static enum order_status execute(enum action_type action)
 		printf(" %s: Rejected.\n", __func__);
 		break;
 	case 0b110: /*sell-and-buy, incomplete, buy */
-		fscanf(pot, "%lf", &cash);
 		if (cash < price * my_position.quantity) {
-			printf(" %s: insufficient cash.\n", __func__);
+			printf(" %s: insufficient cash. ", __func__);
 			break;
 		}
 	case 0b011: /*buy-and-sell, incomplete, sell */
@@ -112,7 +110,8 @@ static enum order_status execute(enum action_type action)
 			}
 		} while (status != order_executed && trials);
 	}
-	fprintf(pot, "%f\n", cash);
+	rewind(pot);
+	fprintf(pot, "%lf\n", cash);
 	funlockfile(pot);
 	fclose(pot);
 	return status;
@@ -157,16 +156,14 @@ void analyze(void)
 			memset(matbuf, 0, sizeof(matbuf));
 			engOutputBuffer(mateng, matbuf, sizeof(matbuf));
 			engEvalString(mateng, "addpath('matlab_scripts');");
-			/* engSetVisible(mateng, 0); */
+			sprintf(buffer, "mysql%1$s = database('avanza', "
+				"'sinbaski', 'q1w2e3r4', "
+				"'com.mysql.jdbc.Driver', "
+				"'jdbc:mysql://localhost:3306/avanza');",
+				stockinfo.dataid);
+			engEvalString(mateng, buffer);
 		}
 	}
-	sprintf(buffer, "mysql%1$s = database('avanza', "
-		"'sinbaski', 'q1w2e3r4', "
-		"'com.mysql.jdbc.Driver', "
-		"'jdbc:mysql://localhost:3306/avanza');",
-		stockinfo.dataid);
-	engEvalString(mateng, buffer);
-
 	sprintf(buffer, "myposition%1$s = {%2$d, %3$d, %4$f, %5$ld, \'%6$s\'}",
 		stockinfo.dataid, my_position.mode, my_position.status,
 		my_position.price, my_position.quantity, my_position.time);
