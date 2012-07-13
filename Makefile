@@ -2,10 +2,11 @@ CC := gcc
 srcdir := src
 objdir := obj
 
-USE_FAKE_SOURCE := 1
+USE_FAKE_SOURCE := 0
 DAEMONIZE := 0
-REAL_TRADE := 0
+REAL_TRADE := 1
 CURFEW_AFT_5 = 1
+MATLAB_ROOT=/usr/local/MATLAB/R2010b
 
 srcs := $(wildcard $(srcdir)/*.c)
 objs := $(notdir $(patsubst %.c, %.o, $(srcs)))
@@ -13,6 +14,7 @@ objs := $(addprefix $(objdir)/, $(objs))
 
 CFLAGS := -c -Wall -Werror -Iinclude -g3 \
 $(shell pkg-config --cflags glib-2.0) \
+$(shell mysql_config --cflags) \
 -I$(MATLAB_ROOT)/extern/include \
 -DUSE_FAKE_SOURCE=$(USE_FAKE_SOURCE) \
 -DDAEMONIZE=$(DAEMONIZE) \
@@ -21,6 +23,7 @@ $(shell pkg-config --cflags glib-2.0) \
 
 LDFLAGS := -lcurl -Wl,-Bsymbolic-functions \
 	$(shell pkg-config --libs glib-2.0) -lm \
+	$(shell mysql_config --libs)	\
 	-leng -lmx -L$(MATLAB_ROOT)/bin/glnxa64 \
 	-L$(MATLAB_ROOT)/sys/os/glnxa64
 

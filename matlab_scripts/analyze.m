@@ -8,4 +8,5 @@
 function [action, retcode, msg] = analyze(my_position, dbinfo)
 
 fprintf(2, '[%s]\n', dbinfo{1, 2});
-[action, retcode, msg] = xxl_linsis(my_position, dbinfo);
+[action, retcode, msg] = xxl_linsis9(my_position, dbinfo);
+%[action, retcode, msg] = xxl_chaser(my_position, dbinfo);
