@@ -315,7 +315,7 @@ static void refine_data(FILE *fp, const GRegex *regex)
 				position = within;
 			break;
 		case within: {
-			struct trade trade;
+			struct trade trade, *p;
 			if (g_str_has_prefix(buffer, "</TABLE>"))
 				goto end;
 			if (extract_data(buffer, &trade, regex)) {
@@ -325,18 +325,19 @@ static void refine_data(FILE *fp, const GRegex *regex)
 			}
 			if (strcmp(trade.time, "09:00:00") < 0)
 				break;
-			if (gp != 0 && trade_equal(
-				    &trade, (struct trade *)
-				    g_list_nth_data(market.trades,
-						    gp - 1)))
-				goto end;
-			else {
-				struct trade *p =
-					g_slice_dup(struct trade, &trade);
-				market.trades = g_list_insert(
-					market.trades, p, gp);
-				market.new_trades++;
+			if (gp > 0) {
+				struct trade *trade2 = gp > 0 ? (struct trade *)
+					g_list_nth_data(market.trades, gp - 1)
+					: NULL;
+				if (abs(trade.price - trade2->price)
+				    /trade2->price > 2.0e-2)
+					break;
+				if (trade_equal(&trade, trade2))
+					goto end;
 			}
+			p = g_slice_dup(struct trade, &trade);
+			market.trades = g_list_insert(market.trades, p, gp);
+			market.new_trades++;
 			break;
 		}
 		default:
@@ -471,6 +472,7 @@ static int get_status(enum trade_status *status, double *price)
 			continue;
 		str = g_match_info_fetch(match_info, 1);
 		sscanf(str, "%lf", price);
+		g_free(str);
 		str = g_match_info_fetch(match_info, 2);
 		if (strcmp(str, "BUY") == 0)
 			*status = my_position.mode == buy_and_sell ?
@@ -478,6 +480,8 @@ static int get_status(enum trade_status *status, double *price)
 		else
 			*status = my_position.mode == buy_and_sell ?
 				complete : incomplete;
+		g_free(str);
+		g_match_info_free(match_info);
 	}
 	g_regex_unref(regex);
 	return 0;
@@ -655,6 +659,7 @@ static void collect_data(void)
 	g_list_free_full(market.trades, free_trade);
 	g_regex_unref(regex);
 	g_string_free(gstr, TRUE);
+	gstr = NULL;
 #if USE_FAKE_SOURCE
 	if (strcmp(message, "done") != 0) {
 		req = fopen("./req-fifo", "w");

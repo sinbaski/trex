@@ -4,11 +4,7 @@ wd=/home/xxie/work/avanza/data_extract/intraday
 
 if [ "$wd" != `pwd` ]; then cd $wd; fi
 
-if [ -z "$LD_LIBRARY_PATH" ]; then
-    LD_LIBRARY_PATH=/usr/local/MATLAB/R2010b/bin/glnxa64
-    LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/MATLAB/R2010b/sys/os/glnxa64
-    export LD_LIBRARY_PATH
-
+if ! echo $PATH | grep -q MATLAB; then
     MATLAB_ROOT=/usr/local/MATLAB/R2010b
     PATH="$PATH:$MATLAB_ROOT/bin"
     export PATH
@@ -43,6 +39,6 @@ while test 1; do
 	    echo "[`date +%H:%M:%S`] starting $stock..."
 	    ./intraday.sh start $stock $do_trade $allow_new
 	fi
-    done < stocks.txt
+    done < stocks.conf
     sleep 310
 done &

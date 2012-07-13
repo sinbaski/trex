@@ -36,11 +36,23 @@ void set_position(const struct trade_position *position)
 	my_position.quantity = position->quantity;
 }
 
+/* static double calculate_profit(double price) */
+/* { */
+/* 	const double feerate = 0.08e-2; */
+/* 	double diff; */
+/* 	if (my_position.mode == buy_and_sell) */
+/* 		diff = price - my_position.price; */
+/* 	else */
+/* 		diff = my_position.price - price; */
+/* 	return (diff - (price + my_position.price) * feerate) * my_position.quantity; */
+/* } */
+
 static enum order_status execute(enum action_type action)
 {
 	struct trade *trade = (struct trade *)g_list_last(market.trades)->data;
 	double price = trade->price;
 	double cash;
+	const double feerate = 0.08e-2;
 	enum order_status status = order_failed;
 	int trials = 3;
 	const int limtime = 20, delay = 5;
@@ -65,8 +77,11 @@ static enum order_status execute(enum action_type action)
 				strcpy(my_position.time, get_timestring());
 				if (my_position.mode == 0)
 					cash -= price * my_position.quantity;
-				else
-					cash += price * my_position.quantity;
+				else {
+					cash += price * my_position.quantity -
+						(price + my_position.price) *
+						feerate * my_position.quantity;
+				}
 			} else {
 				time(&t2);
 				if (--trials) {
@@ -95,7 +110,9 @@ static enum order_status execute(enum action_type action)
 			if ((status = send_order(action)) == order_executed) {
 				my_position.status = complete;
 				if (my_position.mode == 0)
-					cash += price * my_position.quantity;
+					cash += price * my_position.quantity -
+						(price + my_position.price) *
+						feerate * my_position.quantity;
 				else
 					cash -= price * my_position.quantity;
 			} else {
@@ -111,7 +128,7 @@ static enum order_status execute(enum action_type action)
 		} while (status != order_executed && trials);
 	}
 	rewind(pot);
-	fprintf(pot, "%lf\n", cash);
+	fprintf(pot, "%.2lf\n", cash);
 	funlockfile(pot);
 	fclose(pot);
 	return status;
@@ -139,14 +156,18 @@ void analyze(void)
 	char msg[256], matbuf[256], buffer[512];
 	int l;
 
+	if (! my_flags.do_trade)
+		return;
+
 #if CURFEW_AFT_5
-	if (my_flags.allow_new_entry && strcmp(trade->time, "16:30:00") > 0)
+	if (my_flags.allow_new_entry && strcmp(trade->time, "16:00:00") > 0)
 		my_flags.allow_new_entry = 0;
 #endif
 
-	if (! my_flags.do_trade || (my_position.status == complete &&
-				   ! my_flags.allow_new_entry))
+	if (my_position.status == complete && ! my_flags.allow_new_entry) {
+		analyzer_cleanup();
 		return;
+	}
 	if (!mateng) {
 		mateng = engOpen("matlab");
 		if (!mateng) {
@@ -206,4 +227,5 @@ void analyzer_cleanup(void)
 	sprintf(stmt, "close(mysql%s);", stockinfo.dataid);
 	engEvalString(mateng, stmt);
 	engClose(mateng);
+	mateng = NULL;
 }
