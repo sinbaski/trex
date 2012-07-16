@@ -11,7 +11,6 @@
 #define DATA_XCHG_FILE "./intraday.html"
 #define PI 3.1416
 #define BATCH_SIZE 15
-#define WORKDIR "/home/xxie/work/avanza/data_extract/intraday"
 
 MYSQL *mysqldb;
 char tbl_name[64];
@@ -93,7 +92,7 @@ int main (int argc, char *argv[])
 		printf("Usage: %s tbl_name date\n", argv[0]);
 		return 0;
 	}
-	chdir(WORKDIR);
+	/* chdir(WORKDIR); */
 	strcpy(tbl_name, argv[1]);
 	strcpy(date, argv[2]);
 	time(&now);

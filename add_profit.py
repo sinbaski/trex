@@ -1,7 +1,7 @@
 #!/usr/bin/python
 import os, re, _mysql, sys
 
-os.chdir("/home/xxie/work/avanza/data_extract/intraday");
+#os.chdir("/home/xxie/work/avanza/data_extract/intraday");
 
 fl = open(sys.argv[1], 'r');
 pattern = re.compile("profit=([0-9.]+)");
