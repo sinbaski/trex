@@ -2,10 +2,10 @@ CC := gcc
 srcdir := src
 objdir := obj
 
-USE_FAKE_SOURCE := 0
+USE_FAKE_SOURCE := 1
 DAEMONIZE := 0
-REAL_TRADE := 1
-CURFEW_AFT_5 = 1
+REAL_TRADE := 0
+CURFEW_AFT_5 = 0
 MATLAB_ROOT=/usr/local/MATLAB/R2010b
 
 srcs := $(wildcard $(srcdir)/*.c)
@@ -35,8 +35,8 @@ $(objs): $(objdir)/%.o: $(srcdir)/%.c
 fakesource:
 	make -C fakesource all
 
-.PHONY: intraday
-intraday: $(objs)
+.PHONY: intraday-test
+intraday-test: $(objs)
 	$(CC) $(filter %.o, $^) $(LDFLAGS) -o $@
 
 .PHONY: all

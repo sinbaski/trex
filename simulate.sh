@@ -30,6 +30,6 @@ case $cmd in
 	read opt < /tmp/tmp.txt 
 	fakesource/fakesource $sname $day &
 	echo "$opt"
-	./intraday $opt
+	./intraday-test $opt
 	echo Simulation is complete.
 esac
