@@ -128,19 +128,35 @@ zeta_d = polyder(zeta);
 zeta_dv = polyval(zeta_d, N, [], mu);
 
 abslevel = sum(price < price(end))/N;
+minp = min(price);
 if mystatus == 0
-    flag = pivotal == -1;
-    flag = flag && trend == 1;
-    flag = flag && zeta_dv > 0;
-    if max_alpha > 0.1 && alpha(1) > 0.05
-        flag = flag && datenum(nowtime) < datenum('16:30');
+
+    if alpha(1) > 2.5e-1 && price(N) < minp * 1.01
+        flag = trend == 1;
+        msg = sprintf(['[%s] price=%.2f; N=%d; alpha(1)=%e; '...
+                       'trend=[%e %e]; abslevel=%e'], nowtime, ...
+                      price(end), N, alpha(1), gamma_dv, zeta_dv, ...
+                      abslevel);
+    
+    elseif max_alpha > 0.1 && alpha(1) > 0.05 && alpha(1) < 0.3
+        flag = pivotal == -1;
         flag = flag && alpha(1) > max_alpha*0.5;
+        flag = flag && trend == 1;
+        flag = flag && zeta_dv > 0;
+        flag = flag && price(N) < minp * 1.02;
+        flag = flag && datenum(nowtime) < datenum('16:30');
+
         % flag = flag && zeta_dv > 0.1;
         msg = sprintf(['[%s] price=%.2f; N=%d; max_alpha=%e; '...
-                       'trend=[%e %e %e]'], nowtime, price(end), N,...
-                      max_alpha, alpha(1), gamma_dv, zeta_dv);
+                       'trend=[%e %e %e]; abslevel=%e'], nowtime,...
+                      price(end), N, max_alpha, alpha(1), gamma_dv,...
+                      zeta_dv, abslevel);
     
     elseif price(N) < price(1) * (1 - 2.6e-2)
+        flag = pivotal == -1;
+        flag = flag && trend == 1;
+        flag = flag && price(N) - min(price)
+        flag = flag && zeta_dv > 0;
         flag = flag && datenum(nowtime) < datenum('16:00');
         saving_meal = 1;
         msg = sprintf(['[%s] price=%.2f; N=%d; price(1)=%f; '...
@@ -178,6 +194,7 @@ elseif mystatus == 1
     flag = flag && ~saving_meal;
     flag = flag && pivotal == 1;
     flag = flag && alpha(1) < 0;
+    flag = flag && zeta_dv < 0;
     % flag = flag && (alpha(1) < 0.1 && plevel > threshold || ...
     %                 gamma_dv < -0.2);
     % flag = flag && (alpha(1) < 0.1 && plevel > threshold);
@@ -186,7 +203,7 @@ elseif mystatus == 1
     end
     msg = sprintf(['[%s] price=%.2f; N=%d; ' ...
                    'profit=%f; abslevel=%e; '...
-                   'alpha(1)=%e; gamma_dv=%e'], nowtime, ...
+                   'trend=[%e %e %e]; Escape'], nowtime, ...
                   price(end), N, profit, abslevel, ...
-                  alpha(1), gamma_dv);
+                  alpha(1), gamma_dv, zeta_dv);
 end
