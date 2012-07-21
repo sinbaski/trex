@@ -5,4 +5,4 @@ if mymode == 0
 else
     diff = myprice - price;
 end
-profit = (diff - (price + myprice) * feerate) * myquantity;
+profit = diff * myquantity - 198;
