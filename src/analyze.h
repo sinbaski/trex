@@ -117,7 +117,7 @@ int inline indicators_initialized(void);
 int get_num_records(const char *date);
 time_t get_trade(MYSQL *db, long n, struct trade *trade1);
 time_t parse_time(const char *timestring);
-enum order_status send_order(enum action_type action);
+enum order_status send_order(enum action_type action, const char *price);
 void set_position(const struct trade_position *position);
 void discard_old_records(int size);
 void analyze(void);
