@@ -1,9 +1,9 @@
-function [action, retcode, msg] = xxl_chaser(my_position, dbinfo)
+function [action, retcode, msg] = xxl_chaser1(my_position, dbinfo)
 
 BUY = int8(0);
 SELL = int8(1);
 NONE = int8(2);
-mindata = 100;
+timefmt = 'HH:MM:SS';
 
 mymode = my_position{1, 1};
 mystatus = my_position{1, 2};
@@ -16,23 +16,48 @@ nowtime = dbinfo{1, 2};
 tbl_name = dbinfo{1, 3};
 mysql = dbinfo{1, 4};
 
-persistent max_alpha;
-persistent pillar_idx;
+%persistent max_alpha;
+%persistent pillar_idx;
+t2 = datevec(nowtime, timefmt);
+t1 = [0, 0, 0, 9, 0, 0];
+indice = ones(1, 3);
 persistent saving_meal;
+persistent top_price;
+persistent exit_rate;
+persistent viscous
 
 if isempty(saving_meal)
     saving_meal = 0;
 end
 
-stmt = sprintf(['select price from %s where tid like "%s ' ...
+if isempty(top_price)
+    stmt = sprintf(['select top_price, exit_rate, viscous '...
+                    'from parameters where co_name="%s";'],...
+                   tbl_name);
+    data = fetch(mysql, stmt);
+    top_price = cell2mat(data(1, 1));
+    exit_rate = cell2mat(data(1, 2));
+    viscous = cell2mat(data(1, 3));
+end
+
+stmt = sprintf(['select time(tid), price from %s where tid like "%s ' ...
                 '%%" and time(tid) <= "%s" order by tid asc;'], ...
                tbl_name, today, nowtime);
 data = fetch(mysql, stmt);
-price = cell2mat(data(:, 1));
+N = size(data, 1);
+tid = datevec(data(:, 1), timefmt);
+price = cell2mat(data(:, 2));
+for a = N-1:-1:1
+    if indice(1) == 1 && timediff(tid(a, :), t2) >= 20*60
+        indice(1) = a;
+    elseif indice(2) == 1 && timediff(tid(a, :), t2) >= 75*60
+        indice(2) = a;
+    % elseif indice(3) == 1 && timediff(tid(a, :), t2) >= 7200
+    %     indice(3) = a;
+    %     break;
+    end
+end
 
-N = length(price);
-good_rate = 3.0e-3;
-        
 retcode = int8(0);
 action = int8(NONE);
 msg = sprintf('[%s]\n', nowtime);
@@ -42,14 +67,22 @@ if mymode == 1
     return;
 end
 
-if (N < 800 && mystatus == 0 ||...
-    N < 100 && mystatus == 1)
-    msg = sprintf('[%s] Only %d trades.\n',...
-                  nowtime, length(price));
+% if (N < 800 && mystatus == 0 ||...
+%     N < 100 && mystatus == 1)
+%     msg = sprintf('[%s] Only %d trades.\n',...
+%                   nowtime, length(price));
+%     return;
+% end
+
+if (timediff([0, 0, 0, 10, 0, 0], t2) < 0 && mystatus == 0 ||...
+    timediff([0, 0, 0, 9, 5, 0], t2) < 0 && mystatus == 1)
+    msg = sprintf('[%s] Only %d trades.\n', nowtime, N);
     return;
 end
 
-n = min([N, 400]);
+% n = max([N-indice(1)+1, 400]);
+% n = min([n, N]);
+n = N-indice(1)+1;
 pivotal = 0;
 [gamma, S, mu] = polyfit((1:n)', price(N-n+1:N), 3);
 gamma_d = polyder(gamma);
@@ -86,19 +119,20 @@ if ~isempty(gamma_d_roots)
     end
 end
 
-n = 40;
-[beta, S, mu] = polyfit((1:n)', price(N-n+1:N), 1);
-beta_t = 2.0e-2;
+% n = 40;
+% [beta, S, mu] = polyfit((1:n)', price(N-n+1:N), 1);
+% beta_t = 2.0e-2;
 
-if gamma_dv > gamma_dvt && beta(1) > -beta_t
+if gamma_dv > gamma_dvt % && beta(1) > -beta_t
     trend = 1;
-elseif gamma_dv < -gamma_dvt && beta(1) < beta_t
+elseif gamma_dv < -gamma_dvt % && beta(1) < beta_t
     trend = -1;
 else
     trend = 0;
 end
 
-if mystatus == 1
+good_rate = 3.0e-3;
+if mystatus == 1 && timediff([0, 0, 0, 10, 0, 0], t2) < 0
     profit = xxl_profit(mymode, myprice, myquantity, price(end));
     if profit > myprice*myquantity*good_rate && trend == -1
 
@@ -111,14 +145,9 @@ if mystatus == 1
     end
 end
 
-% M = min([N, 2000]);
-[alpha, S, mu] = polyfit((1:N)', price(1:N), 1);
-if isempty(max_alpha) || alpha(1) > max_alpha
-    max_alpha = alpha(1);
-    pillar_idx = N;
-end
-
-M = min(1000, N);
+% M = max([N-indice(2)+1, 1000]);
+% M = min([M, N]);
+M = N-indice(2)+1;
 [zeta, S, mu] = polyfit((1:M)', price(N-M+1:N), 4);
 zeta_d = polyder(zeta);
 zeta_dv = polyval(zeta_d, M, [], mu);
@@ -146,15 +175,13 @@ switch length(zeta_d_roots)
         category = 11;
     end
   case 2
-    if (polyval(zeta_d2, zeta_d_roots(2), [], mu) > 0 &&...
-        zeta_d_roots(2) - zeta_d_roots(1) > 100)
+    if (polyval(zeta_d2, zeta_d_roots(2), [], mu) > 0)
         category = 20;
     else
         category = 21;
     end
   case 3
-    if (polyval(zeta_d2, zeta_d_roots(3), [], mu) > 0 &&...
-        zeta_d_roots(3) - zeta_d_roots(2) > 100)
+    if (polyval(zeta_d2, zeta_d_roots(3), [], mu) > 0)
         category = 30;
     else
         category = 31;
@@ -163,50 +190,58 @@ switch length(zeta_d_roots)
     category = -1;
 end
 
-abslevel = sum(price <= price(end))/N;
 minp = min(price);
-up = (price(end) - minp)/minp;
+maxp = max(price);
+mindiff = xxl_mindiff(my_position, price(end), exit_rate);
+abslevel = (price(end) - minp)/(maxp - minp);
+%up = (price(end) - minp)/minp;
 dist = std(price(end-M+1:end))/mean(price(end-M+1:end));
-% flag = flag && dist > 2.6e-3;
-% if alpha(1) > 0.1
-%     uplim = 2.0e-2 - 6.67e-2 * (alpha(1) - 1.0e-1);
-% end
-
 if mystatus == 0
     flag = 0;
     switch category
       case {0, 10, 20, 30}
-        flag = 1;
-        flag = flag && alpha(1) > -0.1;
-        flag = flag && trend == 1;
-        flag = flag && up < 0.01;
-        msg = sprintf(['[%s] price=%.2f; N=%d; alpha(1)=%e; dist=%e '...
-                       'abslevel=%e; up=%e; category=%d'], ...
-                      nowtime, price(end), N, alpha(1), ...
-                      dist, abslevel, up, category);
+        % [alpha, S, mu] = polyfit((1:N)', price(1:N), 1);
+        entry = 0;
         
+        flag = 1;
+        flag = flag && price(end) < top_price;
+        flag = flag && (maxp - minp) > mindiff * 2;
+        flag = flag && pivotal == -1;
+        flag = flag && trend == 1;
+        flag = flag && abslevel < 0.5;
+        flag = flag && dist > 1.0e-3;
+
+        % if flag
+        %     if price(N) > price(1) * (1 - 2.0e-2)
+        %         flag = flag && alpha(1) > -0.1;
+        %         entry = 1;
+        %     else
+        %         saving_meal = 1;                
+        %         entry = 2;
+        %     end
+        % end
+        msg = sprintf(['[%s] price=%.2f; N=%d; gamma_dv=%e; dist=%e; '...
+                       'abslevel=%e; category=%d; price(1)=%.2f; '...
+                       'entry=%d'], ...
+                      nowtime, price(end), N, gamma_dv, ...
+                      dist, abslevel, category, price(1), entry);
       otherwise
-        if price(N) < price(1) * (1 - 2.6e-2)
-            flag = pivotal == -1;
-            flag = flag && trend == 1;
-            flag = flag && zeta_dv > 0;
-            flag = flag && datenum(nowtime) > datenum('16:00');
-            saving_meal = 1;
-        end
         msg = sprintf(['[%s] price=%.2f; N=%d; price(1)=%f; '...
                        'category=%d'], nowtime, ...
                       price(end), N, price(1), category);
-
     end
     if (flag)
         action = xxl_act(mymode, mystatus);
     end
 elseif mystatus == 1
     profit = xxl_profit(mymode, myprice, myquantity, price(end));
-    flag = profit > 0;
+    flag = profit > myprice * myquantity * exit_rate;
     flag = flag && ~saving_meal;
-    flag = flag && trend == -1;
-    flag = flag && sum([1, 11, 21, 31] == category);
+    if ~viscous
+        flag = flag && trend == -1;
+        flag = flag && sum([1, 11, 21, 31] == category);
+        flag = flag && dist > 1.0e-3;
+    end
     if flag
         action = xxl_act(mymode, mystatus);
     end

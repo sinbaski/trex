@@ -18,9 +18,11 @@ enum rounding_scheme {
 	round_nearest,
 	round_up,
 };
+const char *get_tick_size(double price);
 long str2long(const char *str, int *dignum);
 int pricecmp(const char *pstr1, const char *pstr2);
 GString *round_price(double price, const char *ticksize,
 		     enum rounding_scheme scheme);
 GString *make_valid_price(double price);
+GString *deincreament_price(GString *price, const char *ticksize, int up);
 #endif

@@ -4,6 +4,7 @@ mysql = database('avanza', 'sinbaski', 'q1w2e3r4',...
                  'com.mysql.jdbc.Driver', ...
                  'jdbc:mysql://localhost:3306/avanza');
 
+timefmt = 'HH:MM:SS';
 % name = 'Ericsson_B';
 % day = '2012-03-27';
 % x = 5643;
@@ -12,17 +13,39 @@ mysql = database('avanza', 'sinbaski', 'q1w2e3r4',...
 % day = '2012-07-05';
 % x = 1734;
 
-name = 'Nordea_Bank';
-day = '2012-02-20';
-x = 1971;
+% name = 'ABB_Ltd';
+% day = '2012-08-08';
+% x = 1030;
 
-% name = 'Volvo_B';
-% day = '2012-07-19';
-% x = 3247;
+name = 'Volvo_B';
+day = '2012-08-09';
+x = 3210;
 
-stmt = sprintf(['select price, volume from %s where tid like ' ...
+% name = 'Sandvik';
+% day = '2012-07-20';
+% x = 2465;
+
+stmt = sprintf(['select time(tid), price from %s where tid like ' ...
                 '"%s %%" order by tid asc;'], name, day);
-X = fetch(mysql, stmt);
+data = fetch(mysql, stmt);
+close(mysql);
+N = size(data, 1);
+tid = datevec(data(:, 1), timefmt);
+price = cell2mat(data(:, 2));
+t2 = datevec(data(x, 1), timefmt);
+t1 = [0, 0, 0, 9, 0, 0];
+indice = ones(1, 3);
+for a = x-1:-1:1
+    if indice(1) == 1 && timediff(tid(a, :), t2) >= 20*60
+        indice(1) = a;
+    elseif indice(2) == 1 && timediff(tid(a, :), t2) >= 75*60
+        indice(2) = a;
+    % elseif indice(3) == 1 && timediff(tid(a, :), t2) >= 7200
+    %     indice(3) = a;
+    %     break;
+    end
+end
+
 
 % X = fetch(mysql, ['select price, volume from TeliaSonera where tid like ' ...
 %                   '"2012-06-12 %" order by tid asc;']);
@@ -33,55 +56,68 @@ X = fetch(mysql, stmt);
 %                   '"2012-01-18 %" order by tid;']);
 %X = flipud(X);
 
-close(mysql);
-price = cell2mat(X(:, 1));
-volume = cell2mat(X(:, 2));
-clear X
-N = length(price);
 
-%ret = price2ret(price(1:x));
-% smoothness = sum(abs(ret))/(x-1);
-%H = compute_hurst(ret);
-%M = min([2000, x]);
-%avg = average_price(price, volume, 10);
 
-M = min(2000, x);
-[alpha, S, mu] = polyfit((x-M+1:x)', price(x-M+1:x), 1);
-alpha_v = polyval(alpha, (x-M+1:x)', S, mu);
 
-errors = abs(alpha_v - price(x-M+1:x));
-plevel = sign(price(x) - alpha_v(end))*...
-         sum(errors < abs(alpha_v(end) - price(x)))/x;
-
-n = min([400, x]);
+% Trend in the last 20 minutes.
+n = x-indice(1)+1;
 [gamma, S, mu] = polyfit((x-n+1:x)', price(x-n+1:x), 3);
 gamma_v = polyval(gamma, (x-n+1:x)', S, mu);
 gamma_d = polyder(gamma);
 gamma_dv = polyval(gamma_d, x, [], mu);
 
-%ret60 = sum(price2ret(price(x-60+1:x)));
-
-M = min([40, x]);
-[beta, S, mu] = polyfit((x-M+1:x)', price(x-M+1:x), 1);
-beta_v = polyval(beta, (x-M+1:x)', [], mu);
-
-M = min(1000, x);
+% trend in the last hour
+M = x-indice(2)+1;
+% pzeta = tsmovavg(price(x-M+1:x), 's', round(M/200), 1);
 [zeta, S, mu] = polyfit((x-M+1:x)', price(x-M+1:x), 4);
 zeta_v = polyval(zeta, (x-M+1:x)', S, mu);
 zeta_d = polyder(zeta);
 zeta_dv = polyval(zeta_d, x, [], mu);
 
-fprintf('%s %s x=%d:\n', name, day, x);
-fprintf(['alpha(1)=%e, beta(1)=%e, gamma_dv=%e\nzeta_dv=%e, '...
-        'alpha_level=%e, abslevel=%e\n'], alpha(1), beta(1),...
-        gamma_dv, zeta_dv, plevel, sum(price(1:x) < ...
-                                       price(x))/x);
+minp = min(price(1:x));
+maxp = max(price(1:x));
+abslevel = (price(x) - minp)/(maxp - minp);
 
+dist = std(price(x-M+1:end))/mean(price(x-M+1:end));
+
+fprintf('%s %s x=%d:\n', name, day, x);
+fprintf(['gamma_dv=%e\n'...
+         'zeta_dv=%e\n'...
+         'abslevel=%e\n'...
+         'dist=%e\n'],...
+        gamma_dv, zeta_dv, abslevel, dist);
+
+%subplot(2, 1, 1);
 plot(1:N, price, '.',...
-     x-length(alpha_v)+1:x, alpha_v,...
-     x-length(beta_v)+1:x, beta_v,...
      x-length(gamma_v)+1:x, gamma_v,...
      x-length(zeta_v)+1:x, zeta_v);
 
-grid on
+
+% GARCH model from here onward.
+
+% avg = time_average(price(1:x), tid(1:x, :), 60);
+
+% subplot(2, 1, 2);
+% plot(1:length(avg), avg);
+% grid on
+
+% spec = garchset('Distribution' , 'T',...
+%                 'Display', 'off', ...
+%                 'VarianceModel', 'GARCH',...
+%                 'P', 1, 'Q', 1, ...
+%                 'R', 5, 'M', 5);
+
+% rets = price2ret(avg);
+
+% [spec, errors, LLF, residuals, sigmas, summary] = ...
+%     garchfit(spec, rets);
+
+% fprintf('%s. Exitflag=%d\n', summary.converge, summary.exitFlag);
+
+% if summary.exitFlag > 0
+%     [sigmaF, meanF] = garchpred(spec, rets, 10);
+    
+%     priceF = ret2price(meanF, avg(end), [], 0, 'periodic');
+%     meanF
+% end
 

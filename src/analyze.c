@@ -23,11 +23,11 @@ const char *action_strings[number_of_action_types] = {
 	"BUY", "SELL", "NONE"
 };
 
-struct trade_const trade_constants = {
-	.dpricestr = "0.0001",
-	/* 4 digits after the decimal point */
-	.dpricepcr = 4
-};
+/* struct trade_const trade_constants = { */
+/* 	.dpricestr = "0.0001", */
+/* 	/\* 4 digits after the decimal point *\/ */
+/* 	.dpricepcr = 4 */
+/* }; */
 
 void set_position(const struct trade_position *position)
 {
@@ -46,19 +46,61 @@ void set_position(const struct trade_position *position)
 /* 		diff = my_position.price - price; */
 /* 	return (diff - (price + my_position.price) * feerate) * my_position.quantity; */
 /* } */
+static enum order_status loop_execute(enum trade_status new_status,
+				      double *cash, enum action_type action)
+{
+	struct trade *trade = (struct trade *)g_list_last(market.trades)->data;
+	double price = trade->price;
+	enum order_status status = order_failed;
+	GString *strprice = make_valid_price(price);
+	const char *ticksize = get_tick_size(price);
+	/* const int limtime = 40, delay = 8; */
+	const int delay = 8;
+	int trials = 4;
+	/* time_t t1, t2; */
+
+	/* time(&t1); */
+	while (status != order_executed && trials--) {
+		if ((status = send_order(action, strprice->str))
+		    == order_executed) {
+
+			sscanf(strprice->str, "%lf", &my_position.price);
+			my_position.status = new_status;
+			strcpy(my_position.time, trade->time);
+			if ((my_position.mode == 0 &&
+			     new_status == incomplete) ||
+			    (my_position.mode == 1 &&
+			     new_status == complete))
+				*cash -= price * my_position.quantity;
+			else {
+				*cash += price * my_position.quantity;
+			}
+			*cash -= 99;
+		} else {
+			/* time(&t2); */
+			printf("%d ", trials);
+			if (trials == 0) continue;
+			sleep(delay);
+			/* if (t2 + delay - t1 < limtime) { */
+			/* 	trials = 0; */
+			/* 	continue; */
+			/* } */
+			if (trials % 2 == 0) deincreament_price(
+				strprice, ticksize,
+				action == action_buy ? 1 : 0);
+		}
+	}
+	g_string_free(strprice, TRUE);
+	return status;
+}
 
 static enum order_status execute(enum action_type action)
 {
 	struct trade *trade = (struct trade *)g_list_last(market.trades)->data;
 	double price = trade->price;
 	double cash;
-	const double feerate = 0.08e-2;
 	enum order_status status = order_failed;
-	int trials = 3;
-	const int limtime = 20, delay = 5;
-	time_t t1, t2;
 	FILE *pot;
-	time(&t1);
 
 	pot = fopen("pot.txt", "r+");
 	flockfile(pot);
@@ -70,29 +112,7 @@ static enum order_status execute(enum action_type action)
 			break;
 		}
 	case 0b101: /*sell-and-buy, complete, sell */
-		do {
-			if ((status = send_order(action)) == order_executed) {
-				my_position.status = incomplete;
-				my_position.price = price;
-				strcpy(my_position.time, get_timestring());
-				if (my_position.mode == 0)
-					cash -= price * my_position.quantity;
-				else {
-					cash += price * my_position.quantity -
-						(price + my_position.price) *
-						feerate * my_position.quantity;
-				}
-			} else {
-				time(&t2);
-				if (--trials) {
-					printf("%d ", trials);
-					if (t2 + delay - t1 < limtime)
-						sleep(delay);
-					else
-						trials = 0;
-				}
-			}
-		} while (status != order_executed && trials);
+		status = loop_execute(incomplete, &cash, action);
 		break;
 	case 0b001: /*buy-and-sell, complete, sell */
 	case 0b010: /*buy-and-sell, incomplete, buy */
@@ -106,26 +126,7 @@ static enum order_status execute(enum action_type action)
 			break;
 		}
 	case 0b011: /*buy-and-sell, incomplete, sell */
-		do {
-			if ((status = send_order(action)) == order_executed) {
-				my_position.status = complete;
-				if (my_position.mode == 0)
-					cash += price * my_position.quantity -
-						(price + my_position.price) *
-						feerate * my_position.quantity;
-				else
-					cash -= price * my_position.quantity;
-			} else {
-				time(&t2);
-				if (--trials) {
-					printf("%d ", trials);
-					if (t2 + delay - t1 < limtime)
-						sleep(delay);
-					else
-						trials = 0;
-				}
-			}
-		} while (status != order_executed && trials);
+		status = loop_execute(complete, &cash, action);
 	}
 	rewind(pot);
 	fprintf(pot, "%.2lf\n", cash);
@@ -147,13 +148,39 @@ static char *get_mat_string(const char *matbuf, char *str)
 	return str;
 }
 
+static Engine *start_matlab(char *matbuf, int size, const char *dataid)
+{
+	char buffer[256];
+	if (mateng) {
+		engClose(mateng);
+	}
+	mateng = engOpen("matlab");
+	if (mateng == NULL) {
+		fprintf(stderr, "\nCan't start MATLAB engine\n");
+		return NULL;
+	}
+	memset(matbuf, 0, sizeof(matbuf));
+	engOutputBuffer(mateng, matbuf, size);
+	engEvalString(mateng, "addpath('matlab_scripts');");
+	sprintf(buffer, "mysql%1$s = database('avanza', "
+		"'sinbaski', 'q1w2e3r4', "
+		"'com.mysql.jdbc.Driver', "
+		"'jdbc:mysql://localhost:3306/avanza');",
+		dataid);
+	engEvalString(mateng, buffer);
+	return mateng;
+}
+
 void analyze(void)
 {
 	enum action_type action = action_none;
 	enum order_status status;
 	struct trade *trade = (struct trade *)
 		g_list_last(market.trades)->data;
-	char msg[256], matbuf[256], buffer[512];
+	char msg[256] = {
+		"You shouldn't have seen me."
+	};
+	char matbuf[256], buffer[512];
 	int l;
 
 	if (! my_flags.do_trade)
@@ -169,22 +196,11 @@ void analyze(void)
 		return;
 	}
 	if (!mateng) {
-		mateng = engOpen("matlab");
-		if (!mateng) {
-			fprintf(stderr, "\nCan't start MATLAB engine\n");
+		start_matlab(matbuf, sizeof(matbuf), stockinfo.dataid);
+		if (mateng == NULL)
 			return;
-		} else {
-			memset(matbuf, 0, sizeof(matbuf));
-			engOutputBuffer(mateng, matbuf, sizeof(matbuf));
-			engEvalString(mateng, "addpath('matlab_scripts');");
-			sprintf(buffer, "mysql%1$s = database('avanza', "
-				"'sinbaski', 'q1w2e3r4', "
-				"'com.mysql.jdbc.Driver', "
-				"'jdbc:mysql://localhost:3306/avanza');",
-				stockinfo.dataid);
-			engEvalString(mateng, buffer);
-		}
 	}
+begin:
 	sprintf(buffer, "myposition%1$s = {%2$d, %3$d, %4$f, %5$ld, \'%6$s\'}",
 		stockinfo.dataid, my_position.mode, my_position.status,
 		my_position.price, my_position.quantity, my_position.time);
@@ -196,10 +212,19 @@ void analyze(void)
 		"{'%2$s', '%3$s', '%4$s', mysql%1$s});",
 		stockinfo.dataid, todays_date, trade->time, stockinfo.tbl_name);
 	engEvalString(mateng, buffer);
-	
+
 	sprintf(buffer, "[action%1$s retcode%1$s]", stockinfo.dataid);
 	engEvalString(mateng, buffer);
-	sscanf(matbuf, ">> \nans = \n\n    %d %d", (int *)&action, &l);
+	if (sscanf(matbuf, ">> \nans = \n\n    %d %d",
+		   (int *)&action, &l) < 2) {
+		
+		/* MATLAB is malfunctioning. Restart it */
+		fprintf(stderr, "[%s] MATLAB malfunctioning.\n", trade->time);
+		start_matlab(matbuf, sizeof(matbuf), stockinfo.dataid);
+		if (mateng == NULL)
+			return;
+		goto begin;
+	}
 
 	sprintf(buffer, "msg%1$s", stockinfo.dataid);
 	engEvalString(mateng, buffer);

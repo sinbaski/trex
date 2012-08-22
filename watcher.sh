@@ -4,11 +4,11 @@ wd=/home/xxie/work/avanza/data_extract/intraday
 
 if [ "$wd" != `pwd` ]; then cd $wd; fi
 
-if ! echo $PATH | grep -q MATLAB; then
-    MATLAB_ROOT=/usr/local/MATLAB/R2010b
-    PATH="$PATH:$MATLAB_ROOT/bin"
-    export PATH
-fi
+# MATLAB_ROOT is NOT set because ~/.bashrc is not run when
+# this script is run by crontab
+export MATLAB_ROOT=/usr/local/MATLAB/R2012a
+export PATH=$PATH:$MATLAB_ROOT/bin
+# export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$MATLAB_ROOT/bin/glnxa64
 
 while test 1; do
     while read line; do

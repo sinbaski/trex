@@ -15,7 +15,7 @@
 #include "analyze.h"
 #include "utilities.h"
 
-#define MIN_NEW_TRADES 10
+#define MIN_NEW_TRADES 5
 #define TRANSFER_TIMEOUT 60 * 5 /* 5 minutes */
 #define WORKDIR "/home/xxie/work/avanza/data_extract/intraday"
 #define COOKIE_FILE "./cookies.txt"
@@ -35,8 +35,7 @@ struct connection {
 	char errbuf[CURL_ERROR_SIZE];
 	unsigned int valid:1;
 } conn = {
-	.handle = NULL,
-	.valid = 0
+	NULL, "", 0
 };
 
 struct stock_info stockinfo;
@@ -152,12 +151,18 @@ static void free_trade (void *p)
 
 int trade_equal(const struct trade *t1, const struct trade *t2)
 {
-	char p1[20], p2[20];
-	sprintf(p1, "%.*f", trade_constants.dpricepcr, t1->price);
-	sprintf(p2, "%.*f", trade_constants.dpricepcr, t2->price);
+	const char *ticksize1, *ticksize2;
+	double x;
+
+	ticksize1 = get_tick_size(t1->price);
+	ticksize2 = get_tick_size(t2->price);
+	if (strcmp(ticksize1, ticksize2) != 0)
+		return 0;
+	sscanf(ticksize1, "%lf", &x);
+	if (abs(t1->price - t2->price) >= x)
+		return 0;
 	return strcmp(t1->market, t2->market) == 0 &&
 		strcmp(t1->time, t2->time) == 0 &&
-		pricecmp(p1, p2) == 0 &&
 		t1->quantity == t2->quantity;
 }
 
@@ -252,7 +257,7 @@ static int extract_data(const char *buffer, struct trade *trade,
 {
 	GMatchInfo *match_info;
 	int ret;
-	g_regex_match(regex, buffer, 0, &match_info);
+	g_regex_match(regex, buffer, (GRegexMatchFlags)0, &match_info);
 	if (g_match_info_matches(match_info)) {
 		gchar *str;
 
@@ -343,6 +348,7 @@ static void refine_data(FILE *fp, const GRegex *regex)
 		default:
 			;
 		}
+		memset(buffer, sizeof(buffer), 0);
 	}
 end:
 	if (market.new_trades == 0 || log_data(gp) == 0)
@@ -446,8 +452,7 @@ static CURLcode perform_request(void)
 	fflush(stderr);
 	sleep(100 + rand() % 140);
 	prepare_connection();
-	return code != 0 ? code : -EPIPE;
-	return 0;
+	return code;
 }
 #endif
 
@@ -458,16 +463,18 @@ static int get_status(enum trade_status *status, double *price)
 	GRegex *regex;
 	GError *error = NULL;
 	GMatchInfo *match_info;
-	char buffer[128], template[64];
+	char buffer[128], expression[64];
 	if (datafile == NULL) {
 		return -1;
 	}
 	*status = enter_status;
-	sprintf(template, "price=([0-9.]+).*(BUY|SELL); executed[.]$");
-	regex = g_regex_new(template, 0, 0, &error);
+	sprintf(expression, "price=([0-9.]+).*(BUY|SELL); executed[.]$");
+	regex = g_regex_new(expression, (GRegexCompileFlags)0,
+			    (GRegexMatchFlags)0, &error);
 	while (fgets(buffer, sizeof(buffer), datafile)) {
 		gchar *str;
-		g_regex_match(regex, buffer, 0, &match_info);
+		g_regex_match(regex, buffer, (GRegexMatchFlags)0,
+			      &match_info);
 		if (!g_match_info_matches(match_info))
 			continue;
 		str = g_match_info_fetch(match_info, 1);
@@ -534,7 +541,7 @@ static long get_hld_qtt(void)
 	sprintf(buffer, ">%s</a></td><td +valign=\"bottom\" +"
 		"class=\"neutral\"><nobr>([0-9]+)</nobr></td>",
 		stockinfo.name);
-	regex = g_regex_new(buffer, 0, 0, &error);
+	regex = g_regex_new(buffer, (GRegexCompileFlags)0, 0, &error);
 	while (fgets(buffer, sizeof(buffer), fp)) {
 		gchar *str;
 		g_regex_match(regex, buffer, 0, &match_info);
@@ -578,7 +585,8 @@ static void collect_data(void)
 			    "<TD.*>([0-9]{2}:[0-9]{2}:[0-9]{2})</TD>"
 			    "<TD.*>([0-9]+,[0-9]{2})</TD>"
 			    "<TD.*>([0-9]+)</TD></TR>$",
-			    0, 0, &error);
+			    (GRegexCompileFlags)0, (GRegexMatchFlags)0,
+			    &error);
 	update_watcher();
 	prepare_connection();
 
@@ -783,17 +791,16 @@ static enum order_status get_order_status(enum action_type action)
 }
 #endif
 
-enum order_status send_order(enum action_type action)
+enum order_status send_order(enum action_type action, const char *price)
 {
-	struct trade *trade = (struct trade *)g_list_last(market.trades)->data;
 	char buffer[1024];
 	enum order_status ret;
 	const char *actionstr = action == action_buy ? "buy" : "sell";
-	GString *gstr = make_valid_price(trade->price);
+
 	const char *statusstr[] = {
-		[order_executed] = "executed",
-		[order_killed] = "killed",
-		[order_failed] = "unsuccessful"
+		"executed",
+		"killed",
+		"unsuccessful"
 	};
 #if REAL_TRADE
 
@@ -816,7 +823,7 @@ enum order_status send_order(enum action_type action)
 		"searchString=%s&transitionId=%s&commit=true&contractSize=1.0&"
 		"market=INET&currency=SEK&currencyRate=1.0&countryCode=SE&"
 		"orderType=%s&priceMultiplier=1.0&popped=false\n",
-		stockinfo.orderid, my_position.quantity, gstr->str, get_datestring(),
+		stockinfo.orderid, my_position.quantity, price, get_datestring(),
 		actionstr, actionstr, stockinfo.name,
 		action == action_buy ? "21" : "31", actionstr
 		);
@@ -828,7 +835,6 @@ enum order_status send_order(enum action_type action)
 	if ((err = perform_request())) {
 		fclose(fp1);
 		fclose(fp);
-		g_string_free(gstr, TRUE);
 		return order_failed;
 	}
 	fclose(fp);
@@ -843,8 +849,7 @@ enum order_status send_order(enum action_type action)
 		buffer,
 		/* "%s to %s %s at %s kronor.\n", */
 		"The order to %s %s at %s is %s.\n",
-		actionstr, stockinfo.name, gstr->str, statusstr[ret]);
-	g_string_free(gstr, TRUE);
+		actionstr, stockinfo.name, price, statusstr[ret]);
 	declare(buffer);
 	return ret;
 }
@@ -872,18 +877,19 @@ static void signal_handler(int sig, siginfo_t * siginfo, void *context)
 
 int main(int argc, char *argv[])
 {
-	struct sigaction act = {
-		.sa_sigaction = signal_handler,
-		.sa_flags = SA_SIGINFO
-	};
+	struct sigaction act;
 	int cared_signals[] = {
 		SIGTERM, SIGPIPE
 	};
 	struct rlimit rlim = {
 		RLIM_INFINITY, RLIM_INFINITY
 	};
-	int i;
+	unsigned int i;
 	int opt;
+
+	act.sa_sigaction = signal_handler;
+	act.sa_flags = SA_SIGINFO;
+
 	memset(&my_position, 0, sizeof(my_position));
 	memset(&my_flags, 0, sizeof(my_flags));
 	while ((opt = getopt(argc, argv, "s:m:p:q:w:t:d:n:")) != -1) {
