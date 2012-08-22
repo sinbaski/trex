@@ -1,4 +1,4 @@
-function [action, retcode, msg] = xxl_chaser1(my_position, dbinfo)
+function [action, retcode, msg] = xxl_chaser(my_position, dbinfo)
 
 BUY = int8(0);
 SELL = int8(1);
@@ -9,7 +9,8 @@ mymode = my_position{1, 1};
 mystatus = my_position{1, 2};
 myprice = my_position{1, 3};
 myquantity = my_position{1, 4};
-mytime = my_position{1, 5};
+myquota = my_position{1, 5};
+mytime = my_position{1, 6};
 
 today = dbinfo{1, 1};
 nowtime = dbinfo{1, 2};
@@ -21,14 +22,9 @@ mysql = dbinfo{1, 4};
 t2 = datevec(nowtime, timefmt);
 t1 = [0, 0, 0, 9, 0, 0];
 indice = ones(1, 3);
-persistent saving_meal;
 persistent top_price;
 persistent exit_rate;
 persistent viscous
-
-if isempty(saving_meal)
-    saving_meal = 0;
-end
 
 if isempty(top_price)
     stmt = sprintf(['select top_price, exit_rate, viscous '...
@@ -131,13 +127,13 @@ else
     trend = 0;
 end
 
-good_rate = 3.0e-3;
+%good_rate = 3.0e-3;
 if mystatus == 1 && timediff([0, 0, 0, 10, 0, 0], t2) < 0
     profit = xxl_profit(mymode, myprice, myquantity, price(end));
-    if profit > myprice*myquantity*good_rate && trend == -1
+    if (profit > myprice*myquantity*exit_rate &&...
+        (~viscous && trend == -1 || viscous))
 
         action = xxl_act(mymode, mystatus);
-        saving_meal = 0;
         msg = sprintf(...
             ['[%s] price=%f; N=%d; profit=%f; gamma=%f'], nowtime, ...
             price(end), N, profit, gamma_dv);
@@ -211,15 +207,6 @@ if mystatus == 0
         flag = flag && abslevel < 0.5;
         flag = flag && dist > 1.0e-3;
 
-        % if flag
-        %     if price(N) > price(1) * (1 - 2.0e-2)
-        %         flag = flag && alpha(1) > -0.1;
-        %         entry = 1;
-        %     else
-        %         saving_meal = 1;                
-        %         entry = 2;
-        %     end
-        % end
         msg = sprintf(['[%s] price=%.2f; N=%d; gamma_dv=%e; dist=%e; '...
                        'abslevel=%e; category=%d; price(1)=%.2f; '...
                        'entry=%d'], ...
@@ -236,7 +223,6 @@ if mystatus == 0
 elseif mystatus == 1
     profit = xxl_profit(mymode, myprice, myquantity, price(end));
     flag = profit > myprice * myquantity * exit_rate;
-    flag = flag && ~saving_meal;
     if ~viscous
         flag = flag && trend == -1;
         flag = flag && sum([1, 11, 21, 31] == category);

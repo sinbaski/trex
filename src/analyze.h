@@ -85,6 +85,7 @@ struct trade_position {
 	enum trade_mode mode;
 	enum trade_status status;
 	double price;
+	double quota;
 	long quantity;
 	char time[9];
 };

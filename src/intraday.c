@@ -22,7 +22,6 @@
 #define DATA_UPDATE_INTERVAL 36
 
 struct market market;
-enum trade_status enter_status;
 
 enum status {
 	registering,
@@ -90,32 +89,37 @@ static void declare(const char *str)
 	return;
 }
 
-struct stock_info *get_stock_info(const char *id, struct stock_info *info)
+static void load_trade_data(void)
 {
 	MYSQL_RES *res;
 	MYSQL_ROW row;
-	char stmt[128], *p;
+	char stmt[256], *p;
 
-	assert(info != NULL);
-	sprintf(stmt, "select name, orderid from company "
-		"where dataid=\"%s\";", id);
+	sprintf(stmt, "select name, orderid, my_mode, my_status, "
+		"my_price, my_quantity, my_quota from company "
+		"where dataid=\"%s\";", stockinfo.dataid);
 	if (mysql_query(mysqldb, stmt)) {
 		fprintf(stderr, "mysql error: %s\n", mysql_error(mysqldb));
-		return NULL;
+		return;
 	}
 	res = mysql_store_result(mysqldb);
 	row = mysql_fetch_row(res);
-	strcpy(info->name, row[0]);
-	strcpy(info->tbl_name, row[0]);
-	strcpy(info->orderid, row[1]);
-	if (info->dataid != id)
-		strcpy(info->dataid, id);
+	strcpy(stockinfo.name, row[0]);
+	strcpy(stockinfo.tbl_name, row[0]);
+	strcpy(stockinfo.orderid, row[1]);
+	sscanf(row[2], "%d", (int*)&my_position.mode);
+	sscanf(row[3], "%d", (int*)&my_position.status);
+	sscanf(row[4], "%lf", &my_position.price);
+	sscanf(row[5], "%ld", &my_position.quantity);
+	sscanf(row[6], "%lf", &my_position.quota);
 	mysql_free_result(res);
 
-	for (p = info->name; *p != '\0'; p++) {
+	if (my_position.status == 1)
+		strcpy(my_position.time, "00:00:00");
+
+	for (p = stockinfo.name; *p != '\0'; p++) {
 		*p = *p == '_' ? ' ' : *p;
 	}
-	return info;
 }
 
 time_t get_trade(MYSQL *db, long n, struct trade *trade1)
@@ -456,43 +460,43 @@ static CURLcode perform_request(void)
 }
 #endif
 
-static int get_status(enum trade_status *status, double *price)
-{
-	/* "https://www.avanza.se/aza/order/aktie/kopsalj.jsp" */
-	FILE *datafile = fopen(get_filename("transactions", ".txt"), "r");
-	GRegex *regex;
-	GError *error = NULL;
-	GMatchInfo *match_info;
-	char buffer[128], expression[64];
-	if (datafile == NULL) {
-		return -1;
-	}
-	*status = enter_status;
-	sprintf(expression, "price=([0-9.]+).*(BUY|SELL); executed[.]$");
-	regex = g_regex_new(expression, (GRegexCompileFlags)0,
-			    (GRegexMatchFlags)0, &error);
-	while (fgets(buffer, sizeof(buffer), datafile)) {
-		gchar *str;
-		g_regex_match(regex, buffer, (GRegexMatchFlags)0,
-			      &match_info);
-		if (!g_match_info_matches(match_info))
-			continue;
-		str = g_match_info_fetch(match_info, 1);
-		sscanf(str, "%lf", price);
-		g_free(str);
-		str = g_match_info_fetch(match_info, 2);
-		if (strcmp(str, "BUY") == 0)
-			*status = my_position.mode == buy_and_sell ?
-				incomplete : complete;
-		else
-			*status = my_position.mode == buy_and_sell ?
-				complete : incomplete;
-		g_free(str);
-		g_match_info_free(match_info);
-	}
-	g_regex_unref(regex);
-	return 0;
-}
+/* static int get_status(enum trade_status *status, double *price) */
+/* { */
+/* 	/\* "https://www.avanza.se/aza/order/aktie/kopsalj.jsp" *\/ */
+/* 	FILE *datafile = fopen(get_filename("transactions", ".txt"), "r"); */
+/* 	GRegex *regex; */
+/* 	GError *error = NULL; */
+/* 	GMatchInfo *match_info; */
+/* 	char buffer[128], expression[64]; */
+/* 	if (datafile == NULL) { */
+/* 		return -1; */
+/* 	} */
+/* 	*status = enter_status; */
+/* 	sprintf(expression, "price=([0-9.]+).*(BUY|SELL); executed[.]$"); */
+/* 	regex = g_regex_new(expression, (GRegexCompileFlags)0, */
+/* 			    (GRegexMatchFlags)0, &error); */
+/* 	while (fgets(buffer, sizeof(buffer), datafile)) { */
+/* 		gchar *str; */
+/* 		g_regex_match(regex, buffer, (GRegexMatchFlags)0, */
+/* 			      &match_info); */
+/* 		if (!g_match_info_matches(match_info)) */
+/* 			continue; */
+/* 		str = g_match_info_fetch(match_info, 1); */
+/* 		sscanf(str, "%lf", price); */
+/* 		g_free(str); */
+/* 		str = g_match_info_fetch(match_info, 2); */
+/* 		if (strcmp(str, "BUY") == 0) */
+/* 			*status = my_position.mode == buy_and_sell ? */
+/* 				incomplete : complete; */
+/* 		else */
+/* 			*status = my_position.mode == buy_and_sell ? */
+/* 				complete : incomplete; */
+/* 		g_free(str); */
+/* 		g_match_info_free(match_info); */
+/* 	} */
+/* 	g_regex_unref(regex); */
+/* 	return 0; */
+/* } */
 
 #if 0
 /* We must have logged in in order to do this */
@@ -591,8 +595,8 @@ static void collect_data(void)
 	prepare_connection();
 
 	sprintf(xchgfile, "./intraday-%s.html", stockinfo.dataid);
-	if (get_status(&my_position.status, &my_position.price) != 0)
-		return;
+	/* if (get_status(&my_position.status, &my_position.price) != 0) */
+	/* 	return; */
 	for (i = 0; g_atomic_int_get(&my_status) == collecting; i = 1) {
 		struct stat st;
 		FILE *fp;
@@ -892,29 +896,29 @@ int main(int argc, char *argv[])
 
 	memset(&my_position, 0, sizeof(my_position));
 	memset(&my_flags, 0, sizeof(my_flags));
-	while ((opt = getopt(argc, argv, "s:m:p:q:w:t:d:n:")) != -1) {
+	while ((opt = getopt(argc, argv, "s:w:d:n:")) != -1) {
                switch (opt) {
                case 's':
 		       strcpy(stockinfo.dataid, optarg);
 		       break;
-	       case 'm':
-		       sscanf(optarg, "%d", (int *)&my_position.mode);
-		       break;
-               case 'p':
-		       sscanf(optarg, "%lf", &my_position.price);
-		       break;
-	       case 'q':
-		       sscanf(optarg, "%ld", &my_position.quantity);
-		       break;
+	       /* case 'm': */
+	       /* 	       sscanf(optarg, "%d", (int *)&my_position.mode); */
+	       /* 	       break; */
+               /* case 'p': */
+	       /* 	       sscanf(optarg, "%lf", &my_position.price); */
+	       /* 	       break; */
+	       /* case 'q': */
+	       /* 	       sscanf(optarg, "%ld", &my_position.quantity); */
+	       /* 	       break; */
 	       case 'w':
 		       sscanf(optarg, "%d", &i);
 		       my_flags.do_trade = i;
 		       break;
-	       case 't':
-		       sscanf(optarg, "%d", (int *)&my_position.status);
-		       if (my_position.status == 1)
-			       strcpy(my_position.time, "00:00:01");
-		       break;
+	       /* case 't': */
+	       /* 	       sscanf(optarg, "%d", (int *)&my_position.status); */
+	       /* 	       if (my_position.status == 1) */
+	       /* 		       strcpy(my_position.time, "00:00:01"); */
+	       /* 	       break; */
 	       case 'd':
 		       strcpy(todays_date, optarg);
 		       break;
@@ -929,12 +933,10 @@ int main(int argc, char *argv[])
                    exit(EXIT_FAILURE);
                }
 	}
-	enter_status = my_position.status;
-	if (strlen(stockinfo.dataid) == 0 || my_position.quantity == 0) {
-                   fprintf(stderr, "Usage: %s [-s stock] [-m] mode "
-			   "[-p] enter_price -q quantity\n",
-                           argv[0]);
-		exit(EXIT_FAILURE);
+	if (strlen(stockinfo.dataid) == 0) {
+                   fprintf(stderr, "Usage: %s -s stock -w trade? "
+			   "-n new? -d date\n", argv[0]);
+		   exit(EXIT_FAILURE);
 	}
 #if DAEMONIZE
 	daemonize();
@@ -956,7 +958,7 @@ int main(int argc, char *argv[])
 		goto end1;
 	}
 	mysql_autocommit(mysqldb, 1);
-	get_stock_info(stockinfo.dataid, &stockinfo);
+	load_trade_data();
 	collect_data();
 	mysql_close(mysqldb);
 end1:

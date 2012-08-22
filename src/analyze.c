@@ -29,12 +29,12 @@ const char *action_strings[number_of_action_types] = {
 /* 	.dpricepcr = 4 */
 /* }; */
 
-void set_position(const struct trade_position *position)
-{
-	my_position.mode = position->mode;
-	my_position.price = position->price;
-	my_position.quantity = position->quantity;
-}
+/* void set_position(const struct trade_position *position) */
+/* { */
+/* 	my_position.mode = position->mode; */
+/* 	my_position.price = position->price; */
+/* 	my_position.quantity = position->quantity; */
+/* } */
 
 /* static double calculate_profit(double price) */
 /* { */
@@ -46,6 +46,20 @@ void set_position(const struct trade_position *position)
 /* 		diff = my_position.price - price; */
 /* 	return (diff - (price + my_position.price) * feerate) * my_position.quantity; */
 /* } */
+static void update_db_position(void)
+{
+	char stmt[256];
+
+	sprintf(stmt, "update company set my_status=%d, my_price=%f, "
+		"my_quantity=%ld where dataid=\"%s\";",
+		my_position.status, my_position.price,
+		my_position.quantity, stockinfo.dataid);
+	if (mysql_query(mysqldb, stmt)) {
+		fprintf(stderr, "mysql error: %s\n", mysql_error(mysqldb));
+		return;
+	}
+}
+
 static enum order_status loop_execute(enum trade_status new_status,
 				      double *cash, enum action_type action)
 {
@@ -107,10 +121,11 @@ static enum order_status execute(enum action_type action)
 	fscanf(pot, "%lf", &cash);
 	switch (my_position.mode << 2 | my_position.status << 1 | action) {
 	case 0b000: /*buy-and-sell, complete, buy */
-		if (cash < price * my_position.quantity) {
+		if (cash < my_position.quota) {
 			printf(" %s: insufficient cash.\n", __func__);
 			break;
 		}
+		my_position.quantity = (long)floor(my_position.quota/price);
 	case 0b101: /*sell-and-buy, complete, sell */
 		status = loop_execute(incomplete, &cash, action);
 		break;
@@ -201,9 +216,11 @@ void analyze(void)
 			return;
 	}
 begin:
-	sprintf(buffer, "myposition%1$s = {%2$d, %3$d, %4$f, %5$ld, \'%6$s\'}",
+	sprintf(buffer, "myposition%1$s = {%2$d, %3$d, %4$f, "
+		"%5$ld, %6$f, \'%7$s\'}",
 		stockinfo.dataid, my_position.mode, my_position.status,
-		my_position.price, my_position.quantity, my_position.time);
+		my_position.price, my_position.quantity,
+		my_position.quota, my_position.time);
 	engEvalString(mateng, buffer);
 
 	sprintf(buffer,
@@ -234,11 +251,13 @@ begin:
 	/* mxFree(msg); */
 
 	if (action != action_none) {
-		if ((status = execute(action)) == order_executed)
+		if ((status = execute(action)) == order_executed) {
+			update_db_position();
 			printf("%s.", "executed");
-		else
+		} else {
 			printf("%s.", status == order_killed ?
 			       "killed" : "failed");
+		}
 	}
 	printf("\n");
 	fflush(stdout);
