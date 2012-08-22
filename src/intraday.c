@@ -460,106 +460,6 @@ static CURLcode perform_request(void)
 }
 #endif
 
-/* static int get_status(enum trade_status *status, double *price) */
-/* { */
-/* 	/\* "https://www.avanza.se/aza/order/aktie/kopsalj.jsp" *\/ */
-/* 	FILE *datafile = fopen(get_filename("transactions", ".txt"), "r"); */
-/* 	GRegex *regex; */
-/* 	GError *error = NULL; */
-/* 	GMatchInfo *match_info; */
-/* 	char buffer[128], expression[64]; */
-/* 	if (datafile == NULL) { */
-/* 		return -1; */
-/* 	} */
-/* 	*status = enter_status; */
-/* 	sprintf(expression, "price=([0-9.]+).*(BUY|SELL); executed[.]$"); */
-/* 	regex = g_regex_new(expression, (GRegexCompileFlags)0, */
-/* 			    (GRegexMatchFlags)0, &error); */
-/* 	while (fgets(buffer, sizeof(buffer), datafile)) { */
-/* 		gchar *str; */
-/* 		g_regex_match(regex, buffer, (GRegexMatchFlags)0, */
-/* 			      &match_info); */
-/* 		if (!g_match_info_matches(match_info)) */
-/* 			continue; */
-/* 		str = g_match_info_fetch(match_info, 1); */
-/* 		sscanf(str, "%lf", price); */
-/* 		g_free(str); */
-/* 		str = g_match_info_fetch(match_info, 2); */
-/* 		if (strcmp(str, "BUY") == 0) */
-/* 			*status = my_position.mode == buy_and_sell ? */
-/* 				incomplete : complete; */
-/* 		else */
-/* 			*status = my_position.mode == buy_and_sell ? */
-/* 				complete : incomplete; */
-/* 		g_free(str); */
-/* 		g_match_info_free(match_info); */
-/* 	} */
-/* 	g_regex_unref(regex); */
-/* 	return 0; */
-/* } */
-
-#if 0
-/* We must have logged in in order to do this */
-static long get_hld_qtt(void)
-{
-	FILE *fp = fopen("depa.html", "w");
-	const char *url = "https://www.avanza.se/aza/depa/depa.jsp"
-		"?depotnr=7781011";
-	GRegex *regex;
-	GError *error = NULL;
-	char buffer[1024];
-	GMatchInfo *match_info;
-	/* If no match is found, we have 0 shares. */
-	long n = 0;
-	int page_confirmed = 0;
-
-	refresh_conn();
-	curl_easy_setopt(conn.handle, CURLOPT_URL, url);
-	curl_easy_setopt(conn.handle, CURLOPT_REFERER,
-			 "https://www.avanza.se/aza/depa/"
-			 "sammanfattning/sammanfattning.jsp");
-	curl_easy_setopt(conn.handle, CURLOPT_FOLLOWLOCATION, 1);
-	curl_easy_setopt(conn.handle, CURLOPT_AUTOREFERER, 1);
-	curl_easy_setopt(conn.handle, CURLOPT_WRITEDATA, fp);
-	if (perform_request()) {
-		fclose(fp);
-		return -1;
-	}
-	fclose(fp);
-
-	fp = fopen("depa.html", "r");
-	while (fgets(buffer, sizeof(buffer), fp)) {
-		if (g_strrstr(buffer,
-			   "<option value=\"7781011\" selected="
-			   "\"selected\">7781011:") != NULL) {
-			page_confirmed = 1;
-			break;
-		}
-	}
-	if (!page_confirmed) {
-		fclose(fp);
-		prepare_connection();
-		return -1;
-	}
-	fseek(fp, 0, SEEK_SET);
-	sprintf(buffer, ">%s</a></td><td +valign=\"bottom\" +"
-		"class=\"neutral\"><nobr>([0-9]+)</nobr></td>",
-		stockinfo.name);
-	regex = g_regex_new(buffer, (GRegexCompileFlags)0, 0, &error);
-	while (fgets(buffer, sizeof(buffer), fp)) {
-		gchar *str;
-		g_regex_match(regex, buffer, 0, &match_info);
-		if (!g_match_info_matches(match_info))
-			continue;
-		str = g_match_info_fetch(match_info, 1);
-		sscanf(str, "%ld", &n);
-		break;
-	}
-	fclose(fp);
-	g_regex_unref(regex);
-	return n;
-}
-#endif
 
 static inline void update_watcher(void)
 {
@@ -901,24 +801,10 @@ int main(int argc, char *argv[])
                case 's':
 		       strcpy(stockinfo.dataid, optarg);
 		       break;
-	       /* case 'm': */
-	       /* 	       sscanf(optarg, "%d", (int *)&my_position.mode); */
-	       /* 	       break; */
-               /* case 'p': */
-	       /* 	       sscanf(optarg, "%lf", &my_position.price); */
-	       /* 	       break; */
-	       /* case 'q': */
-	       /* 	       sscanf(optarg, "%ld", &my_position.quantity); */
-	       /* 	       break; */
 	       case 'w':
 		       sscanf(optarg, "%d", &i);
 		       my_flags.do_trade = i;
 		       break;
-	       /* case 't': */
-	       /* 	       sscanf(optarg, "%d", (int *)&my_position.status); */
-	       /* 	       if (my_position.status == 1) */
-	       /* 		       strcpy(my_position.time, "00:00:01"); */
-	       /* 	       break; */
 	       case 'd':
 		       strcpy(todays_date, optarg);
 		       break;
