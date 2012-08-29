@@ -69,10 +69,10 @@ enum trade_status {
 };
 
 enum action_type {
-	action_buy = 0,
-	action_sell,
-	action_none,
-	number_of_action_types,
+	action_sell = -1,
+	action_none = 0,
+	action_buy = 1,
+	number_of_action_types = 3
 };
 
 enum order_status {
@@ -103,8 +103,15 @@ struct trade_flags {
 	int allow_new_entry:1;
 };
 
+struct trade_instruction {
+	enum action_type action;
+	double price;
+	char expiration[9];
+};
+
 extern struct trade_position my_position;
 extern struct trade_flags my_flags;
+extern struct trade_instruction latest_instruction;
 extern struct market market;
 extern enum trade_status enter_status;
 extern struct stock_info stockinfo;
@@ -119,8 +126,8 @@ int get_num_records(const char *date);
 time_t get_trade(MYSQL *db, long n, struct trade *trade1);
 time_t parse_time(const char *timestring);
 enum order_status send_order(enum action_type action, const char *price);
-void set_position(const struct trade_position *position);
 void discard_old_records(int size);
+enum order_status execute(enum action_type action, double price);
 void analyze(void);
 void analyzer_cleanup(void);
 struct stock_info *get_stock_info(const char *id, struct stock_info *);

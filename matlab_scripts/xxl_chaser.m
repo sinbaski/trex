@@ -1,8 +1,8 @@
 function [action, retcode, msg] = xxl_chaser(my_position, dbinfo)
 
-BUY = int8(0);
-SELL = int8(1);
-NONE = int8(2);
+SELL = int8(-1);
+NONE = int8(0);
+BUY = int8(1);
 timefmt = 'HH:MM:SS';
 
 mymode = my_position{1, 1};
@@ -55,7 +55,7 @@ for a = N-1:-1:1
 end
 
 retcode = int8(0);
-action = int8(NONE);
+action = NONE;
 msg = sprintf('[%s]\n', nowtime);
 
 if mymode == 1

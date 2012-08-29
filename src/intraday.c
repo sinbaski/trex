@@ -43,6 +43,9 @@ char todays_date[11];
 MYSQL *mysqldb;
 /* A date string indicating the data used for calibration */
 struct trade_flags my_flags;
+struct trade_instruction instruction = {
+	action_none, 0
+};
 volatile enum status my_status;
 
 #if DAEMONIZE
@@ -139,8 +142,8 @@ time_t get_trade(MYSQL *db, long n, struct trade *trade1)
 		return 0;
 	}
 	res = mysql_store_result(mysqldb);
-	row = mysql_fetch_row(res);
 
+	row = mysql_fetch_row(res);
 	sscanf(row[0], "%lf", &trade->price);
 	sscanf(row[1], "%ld", &trade->quantity);
 	strncpy(trade->time, row[2], sizeof(trade->time));
@@ -312,6 +315,41 @@ void discard_old_records(int size)
 	fflush(stderr);
 }
 
+static void get_trade_instruction(void)
+{
+	MYSQL_RES *res;
+	MYSQL_ROW row;
+	char stmt[256];
+	const char *now;
+	int status;
+
+	now = get_timestring();
+	instruction.action = action_none;
+	sprintf(stmt, "select action, price, status, time(expiration) "
+		"from instructions where co_name=\"%s\" and "
+		"date(expiration) = \"%s\" order by expiration;",
+		stockinfo.tbl_name, todays_date);
+	if (mysql_query(mysqldb, stmt)) {
+		fprintf(stderr, "mysql error: %s\n", mysql_error(mysqldb));
+		return;
+	}
+	res = mysql_store_result(mysqldb);
+	while ((row = mysql_fetch_row(res))) {
+		sscanf(row[0], "%d", (int*)&instruction.action);
+		sscanf(row[1], "%lf", &instruction.price);
+		sscanf(row[2], "%d", &status);
+		strcpy(instruction.expiration, row[3]);
+
+		if (status == 0 && strcmp(now, row[3]) < 0)
+			break;
+		else if (status == 0 && strcmp(now, row[3]) > 0) {
+			instruction.action = action_none;
+			break;
+		}
+	}
+	mysql_free_result(res);
+}
+
 static void refine_data(FILE *fp, const GRegex *regex)
 {
 	char buffer[1024];
@@ -367,9 +405,28 @@ static void refine_data(FILE *fp, const GRegex *regex)
 		memset(buffer, sizeof(buffer), 0);
 	}
 end:
-	if (market.new_trades == 0 || log_data(gp) == 0)
+	get_trade_instruction();
+	if (instruction.action != action_none) {
+		if (market.new_trades) {
+			log_data(gp);
+			market.new_trades = 0;
+		}
+		if (execute(instruction.action, instruction.price)
+		    == order_executed) {
+			sprintf(buffer, "update instructions set status = 1 "
+				"where co_name=\"%s\" and "
+				"expiration = \"%s %s\";",
+				stockinfo.tbl_name, todays_date,
+				instruction.expiration);
+			if (mysql_query(mysqldb, buffer)) {
+				fprintf(stderr, "mysql error: %s\n",
+					mysql_error(mysqldb));
+			}
+		}
+	}
+	else if (market.new_trades == 0 || log_data(gp) == 0)
 		return;
-	if (market.new_trades >= MIN_NEW_TRADES) {
+	else if (market.new_trades >= MIN_NEW_TRADES) {
 		analyze();
 		market.new_trades = 0;
 	}
@@ -471,7 +528,6 @@ static CURLcode perform_request(void)
 	return code;
 }
 #endif
-
 
 static inline void update_watcher(void)
 {

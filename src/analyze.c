@@ -23,19 +23,6 @@ const char *action_strings[number_of_action_types] = {
 	"BUY", "SELL", "NONE"
 };
 
-/* struct trade_const trade_constants = { */
-/* 	.dpricestr = "0.0001", */
-/* 	/\* 4 digits after the decimal point *\/ */
-/* 	.dpricepcr = 4 */
-/* }; */
-
-/* void set_position(const struct trade_position *position) */
-/* { */
-/* 	my_position.mode = position->mode; */
-/* 	my_position.price = position->price; */
-/* 	my_position.quantity = position->quantity; */
-/* } */
-
 /* static double calculate_profit(double price) */
 /* { */
 /* 	const double feerate = 0.08e-2; */
@@ -61,10 +48,11 @@ static void update_db_position(void)
 }
 
 static enum order_status loop_execute(enum trade_status new_status,
-				      double *cash, enum action_type action)
+				      double *cash,
+				      enum action_type action,
+				      double price)
 {
 	struct trade *trade = (struct trade *)g_list_last(market.trades)->data;
-	double price = trade->price;
 	enum order_status status = order_failed;
 	GString *strprice = make_valid_price(price);
 	const char *ticksize = get_tick_size(price);
@@ -108,10 +96,8 @@ static enum order_status loop_execute(enum trade_status new_status,
 	return status;
 }
 
-static enum order_status execute(enum action_type action)
+enum order_status execute(enum action_type action, double price)
 {
-	struct trade *trade = (struct trade *)g_list_last(market.trades)->data;
-	double price = trade->price;
 	double cash;
 	enum order_status status = order_failed;
 	FILE *pot;
@@ -127,7 +113,7 @@ static enum order_status execute(enum action_type action)
 		}
 		my_position.quantity = (long)floor(my_position.quota/price);
 	case 0b101: /*sell-and-buy, complete, sell */
-		status = loop_execute(incomplete, &cash, action);
+		status = loop_execute(incomplete, &cash, action, price);
 		break;
 	case 0b001: /*buy-and-sell, complete, sell */
 	case 0b010: /*buy-and-sell, incomplete, buy */
@@ -141,12 +127,16 @@ static enum order_status execute(enum action_type action)
 			break;
 		}
 	case 0b011: /*buy-and-sell, incomplete, sell */
-		status = loop_execute(complete, &cash, action);
+		status = loop_execute(complete, &cash, action, price);
 	}
 	rewind(pot);
 	fprintf(pot, "%.2lf\n", cash);
 	funlockfile(pot);
 	fclose(pot);
+
+	if (status == order_executed) {
+		update_db_position();
+	}
 	return status;
 }
 
@@ -251,13 +241,11 @@ begin:
 	/* mxFree(msg); */
 
 	if (action != action_none) {
-		if ((status = execute(action)) == order_executed) {
-			update_db_position();
+		if ((status = execute(action, trade->price)) == order_executed)
 			printf("%s.", "executed");
-		} else {
+		else
 			printf("%s.", status == order_killed ?
 			       "killed" : "failed");
-		}
 	}
 	printf("\n");
 	fflush(stdout);
