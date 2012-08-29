@@ -165,7 +165,9 @@ int trade_equal(const struct trade *t1, const struct trade *t2)
 	sscanf(ticksize1, "%lf", &x);
 	if (abs(t1->price - t2->price) >= x)
 		return 0;
-	return strcmp(t1->market, t2->market) == 0 &&
+	return strcmp(t1->buyer, t2->buyer) == 0 &&
+		strcmp(t1->seller, t2->seller) == 0 &&
+		strcmp(t1->market, t2->market) == 0 &&
 		strcmp(t1->time, t2->time) == 0 &&
 		t1->quantity == t2->quantity;
 }
@@ -216,9 +218,11 @@ static int log_data(int idx)
 		const struct trade *trade =
 			(struct trade *)node->data;
 		if (!check_redundancy || strcmp(trade->time, last.time) > 0) {
-			g_string_append_printf(gstr, "(%7.2lf, %ld, '%s %s'),",
-					       trade->price, trade->quantity,
-					       todays_date, trade->time);
+			g_string_append_printf(
+				gstr, "('%s', '%s', %7.2lf, %ld, '%s %s'),",
+				trade->buyer, trade->seller,
+				trade->price, trade->quantity,
+				todays_date, trade->time);
 			/* fprintf(datafile, "%6s\t%8s\t%7.2lf\t%7ld\n", */
 			/* 	trade->market, trade->time, */
 			/* 	trade->price, trade->quantity); */
@@ -266,19 +270,27 @@ static int extract_data(const char *buffer, struct trade *trade,
 		gchar *str;
 
 		str = g_match_info_fetch(match_info, 1);
-		strcpy(trade->market, str);
+		strcpy(trade->buyer, str);
 		g_free(str);
 
 		str = g_match_info_fetch(match_info, 2);
-		strcpy(trade->time, str);
+		strcpy(trade->seller, str);
 		g_free(str);
 
 		str = g_match_info_fetch(match_info, 3);
+		strcpy(trade->market, str);
+		g_free(str);
+
+		str = g_match_info_fetch(match_info, 4);
+		strcpy(trade->time, str);
+		g_free(str);
+
+		str = g_match_info_fetch(match_info, 5);
 		str[strlen(str) - 3] = '.';
 		sscanf(str, "%lf", &trade->price);
 		g_free(str);
 
-		str = g_match_info_fetch(match_info, 4);
+		str = g_match_info_fetch(match_info, 6);
 		sscanf(str, "%ld", &trade->quantity);
 		g_free(str);
 
@@ -483,8 +495,8 @@ static void collect_data(void)
 	char message[10];
 #endif
 	/* The number of shares that we have on the account */
-	regex = g_regex_new("^<TR.*><TD.*>[^<]*</TD>"
-			    "<TD.*>[^<]*</TD>"
+	regex = g_regex_new("^<TR.*><TD.*><A.*>([A-Z]+)</A></TD>"
+			    "<TD.*><A.*>([A-Z]+)</A></TD>"
 			    "<TD.*>([A-Z]+)</TD>"
 			    "<TD.*>([0-9]{2}:[0-9]{2}:[0-9]{2})</TD>"
 			    "<TD.*>([0-9]+,[0-9]{2})</TD>"

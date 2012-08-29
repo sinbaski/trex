@@ -72,7 +72,9 @@ static inline long fnum_of_line(FILE *datafile)
 }
 
 struct trade {
-	char market[10];
+	char buyer[8];
+	char seller[8];
+	char market[8];
 	char time[9];
 	double price;
 	long quantity;
