@@ -1,9 +1,10 @@
-cd ~/intraday
+cd ~/trade/intraday
 
 # tb_names=('Securitas_B' 'Alliance_Oil_Company_SDB' 'Nordea_Bank' 'Ericsson_B' 'boliden');
 # ids=(183950 217041 183830 181870 183828);
-tb_names=(boliden);
-ids=(183828);
+
+tb_names=('Nordea_Bank' 'Ericsson_B' 'Boliden');
+ids=(183830 181870 183828);
 
 for ((i=0; i<${#tb_names[@]}; i++)); do
     stock=${tb_names[$i]};

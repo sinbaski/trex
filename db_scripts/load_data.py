@@ -16,7 +16,7 @@ import os, re, _mysql, sys
 #           Aktie('Ericsson_B', '181870')]
 
 
-os.chdir("/home/xxie/work/avanza/data_extract/intraday");
+os.chdir("/home/xxie/trade/intraday");
 db = _mysql.connect("localhost", "sinbaski", "q1w2e3r4", "avanza")
 
 # print sys.argv[1]
