@@ -39,6 +39,9 @@ struct connection {
 
 struct stock_info stockinfo;
 
+char user[16];
+char password[32];
+
 char todays_date[11];
 MYSQL *mysqldb;
 /* A date string indicating the data used for calibration */
@@ -450,9 +453,10 @@ static int login(void)
 {
 	int ret = 0;
 	int code;
-	const char *loginfo = "username=sinbaski&password=2Oceans?";
+	/* const char *loginfo = "username=sinbaski&password=2Oceans?"; */
+	char loginfo[80];
+	sprintf(loginfo, "username=%s&password=%s", user, password);
 	const char *url ="https://www.avanza.se/aza/login/login.jsp";
-	/* char *str = curl_easy_escape(conn.handle, loginfo, strlen(loginfo)); */
 	FILE *fp;
 	g_atomic_int_set(&my_status, registering);
 
@@ -880,6 +884,12 @@ int main(int argc, char *argv[])
 		       sscanf(optarg, "%d", &i);
 		       my_flags.allow_new_entry = i;
 		       break;		       
+	       case 'u':
+		       sscanf(optarg, "%s", user);
+		       break;
+	       case 'p':
+		       sscanf(optarg, "%s", password);
+		       break;
                default: /* '?' */
                    fprintf(stderr, "Usage: %s -s stock -m mode "
 			   "-q quantity [-p enter_price]\n",
