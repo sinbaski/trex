@@ -10,7 +10,10 @@
 #include <glib.h>
 #include "analyze.h"
 #include "utilities.h"
+
+#if DO_ANALYSIS
 #include "engine.h"
+#endif
 
 #define price2str(price, str)						\
 	({								\

@@ -5,7 +5,7 @@ wd=/home/xxie/work/avanza/data_extract/intraday
 function start_trading {
     do_trade=$2;
     allow_new=$3;
-    ./intraday -s $1 -w $do_trade -n $allow_new -d `date +%F` &
+    ./intraday -u sinbaski -p 2cats4her! -s $1 -w $do_trade -n $allow_new -d `date +%F` &
     rm /tmp/intraday-$1.txt
 }
 

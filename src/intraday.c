@@ -101,7 +101,7 @@ static void load_trade_data(void)
 	MYSQL_ROW row;
 	char stmt[256], *p;
 
-	sprintf(stmt, "select name, orderid, my_mode, my_status, "
+	sprintf(stmt, "select name, tbl_name, orderid, my_mode, my_status, "
 		"my_price, my_quantity, my_quota from company "
 		"where dataid=\"%s\";", stockinfo.dataid);
 	if (mysql_query(mysqldb, stmt)) {
@@ -111,21 +111,17 @@ static void load_trade_data(void)
 	res = mysql_store_result(mysqldb);
 	row = mysql_fetch_row(res);
 	strcpy(stockinfo.name, row[0]);
-	strcpy(stockinfo.tbl_name, row[0]);
-	strcpy(stockinfo.orderid, row[1]);
-	sscanf(row[2], "%d", (int*)&my_position.mode);
-	sscanf(row[3], "%d", (int*)&my_position.status);
-	sscanf(row[4], "%lf", &my_position.price);
-	sscanf(row[5], "%ld", &my_position.quantity);
-	sscanf(row[6], "%lf", &my_position.quota);
+	strcpy(stockinfo.tbl_name, row[1]);
+	strcpy(stockinfo.orderid, row[2]);
+	sscanf(row[3], "%d", (int*)&my_position.mode);
+	sscanf(row[4], "%d", (int*)&my_position.status);
+	sscanf(row[5], "%lf", &my_position.price);
+	sscanf(row[6], "%ld", &my_position.quantity);
+	sscanf(row[7], "%lf", &my_position.quota);
 	mysql_free_result(res);
 
 	if (my_position.status == 1)
 		strcpy(my_position.time, "00:00:00");
-
-	for (p = stockinfo.name; *p != '\0'; p++) {
-		*p = *p == '_' ? ' ' : *p;
-	}
 }
 
 time_t get_trade(MYSQL *db, long n, struct trade *trade1)
@@ -353,60 +349,137 @@ static void get_trade_instruction(void)
 	mysql_free_result(res);
 }
 
-static void refine_data(FILE *fp, const GRegex *regex)
+static char *strsub(char *str, char c1, char c2)
 {
-	char buffer[1024];
-	enum {
-		before, between, within, after
-	} position = before;
-	int gp = g_list_length(market.trades);
-	int l;
+	char *p;
+	int l = strlen(str);
+	for (p = str; p - str < l; p++) {
+		if (*p == c1) *p = c2;
+	}
+	return str;
+}
 
-	while (fgets(buffer, sizeof(buffer), fp) &&
-		position != after) {
-		int len = strlen(buffer);
+static void walk_doc_tree(TidyDoc tdoc, TidyNode tnode,
+			  int *state, struct trade *trade)
+{
+	TidyNode child;
+	int s = *state;
+	int i;
+	static int gp;
 
-		switch (position) {
-		case before:
-			if (g_strstr_len(buffer, len, "Avslut "))
-				position = between;
-			break;
-		case between:
-			if (g_strstr_len(buffer, sizeof(buffer),
-					 "Antal</TD></TR>"))
-				position = within;
-			break;
-		case within: {
-			struct trade trade, *p;
-			if (g_str_has_prefix(buffer, "</TABLE>"))
-				goto end;
-			if (extract_data(buffer, &trade, regex)) {
-				fprintf(stderr, "%s: Invalid record:\n", __func__);
-				fprintf(stderr, "%s\n", buffer);
-				continue;
+	if (*state == 0) gp = g_list_length(market.trades);
+
+	for (child = tidyGetChild(tnode), i = 0; child && state >= 0;
+	     child = tidyGetNext(child)) {
+		ctmbstr name = tidyNodeGetName( child );
+		TidyBuffer buf;
+		if (*state == 0 && name) {
+			walk_doc_tree(tdoc, child, state, trade);
+		} else if (*state == 0 && !name) {
+			tidyBufInit(&buf);
+			tidyNodeGetText(doc, child, &buf);
+			if (buf.bp && strcmp((char *)buf.bp, "Senaste avslut")) {
+				*state = 1;
 			}
-			if (strcmp(trade.time, "09:00:00") < 0)
-				break;
+			tidyBufFree(&buf);
+		} else if (*state == 1 && name && strcmp(name, "tbody") == 0) {
+			*state = 2;
+			walk_doc_tree(tdoc, child, state, trade);
+			*state = -1;
+		} else if (*state == 2 && name && strcmp(name, "tr") == 0) {
+			struct trade *p;
+			*state = 3;
+			walk_doc_tree(tdoc, child, state, trade);
+
 			if (gp > 0) {
 				struct trade *trade2 = gp > 0 ? (struct trade *)
 					g_list_nth_data(market.trades, gp - 1)
 					: NULL;
 				if (abs(trade.price - trade2->price)
 				    /trade2->price > 2.0e-2)
-					break;
-				if (trade_equal(&trade, trade2))
-					goto end;
+					continue;
+				if (trade_equal(trade, trade2)) {
+					*state = -1;
+					continue;
+				}
 			}
-			p = g_slice_dup(struct trade, &trade);
+			p = g_slice_dup(struct trade, trade);
 			market.trades = g_list_insert(market.trades, p, gp);
 			market.new_trades++;
-			break;
+		} else if (*state == 3 && name && strcmp(name, "td") == 0) {
+			*state = 4;
+			walk_doc_tree(tdoc, child, state, trade);
+		} else if (*state >= 4 && name) {
+			(*state)++;
+			walk_doc_tree(tdoc, child, state, trade);
+		} else if (*state >= 4 && !name) {
+			tidyBufInit(&buf);
+			tidyNodeGetText(doc, child, &buf);
+			switch (i)
+			{
+			case 0:
+				sscanf(g_strstrip((char *)buf.bp), "%s",
+				       trade->buyer);
+				break;
+			case 1:
+				sscanf(g_strstrip((char *)buf.bp), "%s",
+				       trade->seller);
+				break;
+			case 2:
+				sscanf(g_strstrip((char *)buf.bp), "%ld",
+				       &trade->quantity);
+				break;
+			case 3:
+				sscanf(strsub(g_strstrip((char *)buf.bp),
+					      ',', '.'), "%f", &trade->price);
+				break;
+			case 4:
+				sscanf(g_strstrip((char *)buf.bp), "%s",
+				       trade->time);
+				break;
+
+			}
 		}
-		default:
-			;
-		}
-		memset(buffer, sizeof(buffer), 0);
 	}
+	if (*state >= 0) *state = s;
+}
+
+static void refine_data(const char* xchgfile)
+{
+	CURL *curl;
+	char curl_errbuf[CURL_ERROR_SIZE];
+	TidyDoc tdoc;
+	TidyBuffer docbuf = {0};
+	TidyBuffer tidy_errbuf = {0};
+	int err;
+	int state;
+	gchar *contents;
+	gsize flen;
+	GError *gerr;
+	struct trade trade;
+
+	tdoc = tidyCreate();
+	tidyOptSetBool(tdoc, TidyForceOutput, yes); /* try harder */
+	tidyOptSetInt(tdoc, TidyWrapLen, 4096);
+	tidySetErrorBuffer( tdoc, &tidy_errbuf );
+	tidyBufInit(&docbuf);
+
+	g_file_get_contents(xchgfile, &contents, &flen, &gerr);
+	tidyBufAppend(&docbuf, contents, flen);
+	err = tidyParseBuffer(tdoc, &docbuf); /* parse the input */
+	if (err < 0) {
+		fprintf(2, "Failed to parse server response. err %d", err);
+		goto cleanup;
+	}
+	err = tidyCleanAndRepair(tdoc); /* fix any problems */
+	if ( err < 0 ) goto cleanup;
+
+	err = tidyRunDiagnostics(tdoc); /* load tidy error buffer */
+	if ( err < 0 ) goto cleanup;
+
+	state = 0;
+	walk_doc_tree(tdoc, tidyGetRoot(tdoc), &state, &trade);
+
 end:
 	get_trade_instruction();
 	if (instruction.action != action_none) {
@@ -430,12 +503,21 @@ end:
 	else if (market.new_trades == 0 || log_data(gp) == 0)
 		return;
 	else if (market.new_trades >= MIN_NEW_TRADES) {
+#if DO_ANALYSIS
 		analyze();
+#endif
 		market.new_trades = 0;
 	}
 	l = g_list_length(market.trades) - MAX_TRADES_COUNT;
 	if (l > 0)
 		discard_old_records(l);
+
+cleanup:
+	g_free(contents);
+	tidyBufFree(&docbuf);
+	tidyBufFree(&tidy_errbuf);
+	tidyRelease(tdoc);
+	return;
 }
 
 size_t store_cookie(void *ptr, size_t size, size_t nmemb, void *userdata)
@@ -585,15 +667,14 @@ static void collect_data(void)
 		time(&t1);
 		refresh_conn();
 		curl_easy_setopt(conn.handle, CURLOPT_WRITEDATA, fp);
-		g_string_printf(gstr, "https://www.avanza.se/aza/"
-				"aktieroptioner/kurslistor/"
-				"avslut.jsp?&orderbookId=%s",
-				stockinfo.dataid);
+		g_string_printf(gstr, "https://www.avanza.se/aktier"
+				"/dagens-avslut.html/%s/%s",
+				stockinfo.dataid, stockinfo.name);
 		curl_easy_setopt(conn.handle, CURLOPT_URL, gstr->str);
-		g_string_printf(gstr, "https://www.avanza.se/aza/"
-				"aktieroptioner/kurslistor/"
-				"aktie.jsp?&orderbookId=%s",
-				stockinfo.dataid);
+
+		g_string_printf(gstr, "https://www.avanza.se/aktier/"
+				"om-aktien.html/%s/%s", stockinfo.dataid,
+				stockinfo.name);
 		curl_easy_setopt(conn.handle, CURLOPT_REFERER, gstr->str);
 		if (perform_request()) {
 			fclose(fp);
@@ -617,9 +698,10 @@ static void collect_data(void)
 #endif
 		stat(xchgfile, &st);
 		if (st.st_size) {
-			fp = fopen(xchgfile, "r");
-			refine_data(fp, regex);
-			fclose(fp);
+			/* fp = fopen(xchgfile, "r"); */
+			/* refine_data(fp, regex); */
+			refine_data(xchgfile);
+			/* fclose(fp); */
 		} else {
 			char *timestring;
 			timestring = get_timestring();
@@ -883,7 +965,7 @@ int main(int argc, char *argv[])
 	       case 'n':
 		       sscanf(optarg, "%d", &i);
 		       my_flags.allow_new_entry = i;
-		       break;		       
+		       break;
 	       case 'u':
 		       sscanf(optarg, "%s", user);
 		       break;
