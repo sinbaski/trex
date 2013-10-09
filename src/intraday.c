@@ -503,9 +503,7 @@ end:
 	else if (market.new_trades == 0 || log_data(gp) == 0)
 		return;
 	else if (market.new_trades >= MIN_NEW_TRADES) {
-#if DO_ANALYSIS
 		analyze();
-#endif
 		market.new_trades = 0;
 	}
 	l = g_list_length(market.trades) - MAX_TRADES_COUNT;

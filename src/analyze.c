@@ -26,16 +26,6 @@ const char *action_strings[number_of_action_types] = {
 	"BUY", "SELL", "NONE"
 };
 
-/* static double calculate_profit(double price) */
-/* { */
-/* 	const double feerate = 0.08e-2; */
-/* 	double diff; */
-/* 	if (my_position.mode == buy_and_sell) */
-/* 		diff = price - my_position.price; */
-/* 	else */
-/* 		diff = my_position.price - price; */
-/* 	return (diff - (price + my_position.price) * feerate) * my_position.quantity; */
-/* } */
 static void update_db_position(void)
 {
 	char stmt[256];
