@@ -1,0 +1,23 @@
+create table company(
+ name varchar(32) not null unique,
+ tbl_name varchar(32) not null primary key,
+ dataid varchar(16) not null unique,
+ orderid varchar(16) not null unique,
+ my_mode tinyint unsigned,
+ my_status tinyint unsigned, 
+ my_price decimal(7,2),
+ my_quantity bigint,
+ my_quota decimal(7,2)
+);
+
+insert into company values
+("nordea-bank", "nordea_bank", "183830", "0", 0, 0, 0, 0, 0),
+("swedbank-a", "swedbank_a", "184051",  "1", 0, 0, 0, 0, 0),
+("volvo-b", "volvo_b", "183829",  "2", 0, 0, 0, 0, 0),
+("scania-b", "scania_b", "183890",  "3", 0, 0, 0, 0, 0),
+("boliden", "boliden", "183828",  "4", 0, 0, 0, 0, 0),
+("abb-ltd", "abb_ltd", "183834", "5", 0, 0, 0, 0, 0),
+("hennes---mauritz-b", "hennes___mauritz_b", "182308", "6", 0, 0, 0, 0, 0);
+
+
+
