@@ -11,6 +11,8 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <curl/curl.h>
+#include <tidy.h>
+#include <buffio.h>
 #include <mysql.h>
 #include "analyze.h"
 #include "utilities.h"
@@ -21,7 +23,7 @@
 #define COOKIE_FILE "./cookies.txt"
 #define DATA_UPDATE_INTERVAL 36
 
-struct market market;
+struct market mkt;
 
 enum status {
 	registering,
@@ -99,7 +101,7 @@ static void load_trade_data(void)
 {
 	MYSQL_RES *res;
 	MYSQL_ROW row;
-	char stmt[256], *p;
+	char stmt[256];
 
 	sprintf(stmt, "select name, tbl_name, orderid, my_mode, my_status, "
 		"my_price, my_quantity, my_quota from company "
@@ -169,7 +171,6 @@ int trade_equal(const struct trade *t1, const struct trade *t2)
 		return 0;
 	return strcmp(t1->buyer, t2->buyer) == 0 &&
 		strcmp(t1->seller, t2->seller) == 0 &&
-		strcmp(t1->market, t2->market) == 0 &&
 		strcmp(t1->time, t2->time) == 0 &&
 		t1->quantity == t2->quantity;
 }
@@ -198,7 +199,7 @@ int get_num_records(const char *date)
 static int log_data(int idx)
 {
 #if !USE_FAKE_SOURCE
-	const GList *node = g_list_nth(market.trades, idx);
+	const GList *node = g_list_nth(mkt.trades, idx);
 	GString *gstr = g_string_sized_new(128);
 	struct trade last;
 	static int check_redundancy = 1;
@@ -226,7 +227,7 @@ static int log_data(int idx)
 				trade->price, trade->quantity,
 				todays_date, trade->time);
 			/* fprintf(datafile, "%6s\t%8s\t%7.2lf\t%7ld\n", */
-			/* 	trade->market, trade->time, */
+			/* 	trade->mkt, trade->time, */
 			/* 	trade->price, trade->quantity); */
 			check_redundancy = 0;
 			n++;
@@ -244,7 +245,7 @@ end:
 	g_string_free(gstr, TRUE);
 	return n;
 #else
-	return market.new_trades;
+	return mkt.new_trades;
 #endif
 }
 
@@ -262,54 +263,13 @@ static void refresh_conn(void)
 }
 #endif
 
-static int extract_data(const char *buffer, struct trade *trade,
-			const GRegex *regex)
-{
-	GMatchInfo *match_info;
-	int ret;
-	g_regex_match(regex, buffer, (GRegexMatchFlags)0, &match_info);
-	if (g_match_info_matches(match_info)) {
-		gchar *str;
-
-		str = g_match_info_fetch(match_info, 1);
-		strcpy(trade->buyer, str);
-		g_free(str);
-
-		str = g_match_info_fetch(match_info, 2);
-		strcpy(trade->seller, str);
-		g_free(str);
-
-		str = g_match_info_fetch(match_info, 3);
-		strcpy(trade->market, str);
-		g_free(str);
-
-		str = g_match_info_fetch(match_info, 4);
-		strcpy(trade->time, str);
-		g_free(str);
-
-		str = g_match_info_fetch(match_info, 5);
-		str[strlen(str) - 3] = '.';
-		sscanf(str, "%lf", &trade->price);
-		g_free(str);
-
-		str = g_match_info_fetch(match_info, 6);
-		sscanf(str, "%ld", &trade->quantity);
-		g_free(str);
-
-		ret = 0;
-	} else
-		ret = -1;
-	g_match_info_free(match_info);
-	return ret;
-}
-
 void discard_old_records(int size)
 {
 	int i;
 	for (i = 0; i < size; i++) {
-		g_slice_free(struct trade, market.trades->data);
-		market.trades = g_list_delete_link(market.trades,
-						   market.trades);
+		g_slice_free(struct trade, mkt.trades->data);
+		mkt.trades = g_list_delete_link(mkt.trades,
+						   mkt.trades);
 	}
 	fflush(stderr);
 }
@@ -359,43 +319,58 @@ static char *strsub(char *str, char c1, char c2)
 	return str;
 }
 
-static void walk_doc_tree(TidyDoc tdoc, TidyNode tnode,
+static int get_node_cardinality(TidyNode tnode)
+{
+	int n;
+	TidyNode node;
+	for (n = 0, node = tnode; node; node = tidyGetPrev(node), n++);
+	return n - 1;
+}
+
+static char *str_rm_html_char(char *str)
+{
+	char *p, *q;
+	for (p = strchr(str, '&'), q = strchr(str, ';');
+	     p && q && q > p;) {
+	
+		strcpy(p, q + 1);
+		if (*p && (p = strchr(p, '&'))) {
+			q = strchr(p, ';');
+		}
+		else q = NULL;
+	}
+	return str;
+}
+static int walk_doc_tree(TidyDoc tdoc, TidyNode tnode,
 			  int *state, struct trade *trade)
 {
 	TidyNode child;
-	int s = *state;
-	int i;
 	static int gp;
 
-	if (*state == 0) gp = g_list_length(market.trades);
+	if (*state == 0) gp = g_list_length(mkt.trades);
 
-	for (child = tidyGetChild(tnode), i = 0; child && state >= 0;
+	for (child = tidyGetChild(tnode); child && state >= 0;
 	     child = tidyGetNext(child)) {
 		ctmbstr name = tidyNodeGetName( child );
 		TidyBuffer buf;
-		if (*state == 0 && name) {
+		if (*state == 0 && name && strcmp(name, "tbody")) {
 			walk_doc_tree(tdoc, child, state, trade);
-		} else if (*state == 0 && !name) {
-			tidyBufInit(&buf);
-			tidyNodeGetText(doc, child, &buf);
-			if (buf.bp && strcmp((char *)buf.bp, "Senaste avslut")) {
-				*state = 1;
-			}
-			tidyBufFree(&buf);
-		} else if (*state == 1 && name && strcmp(name, "tbody") == 0) {
-			*state = 2;
+		} else if (*state == 0 && name && strcmp(name, "tbody") == 0) {
+			*state = 1;
 			walk_doc_tree(tdoc, child, state, trade);
 			*state = -1;
-		} else if (*state == 2 && name && strcmp(name, "tr") == 0) {
+		} else if (*state == 1 && name && strcmp(name, "tr") == 0) {
 			struct trade *p;
-			*state = 3;
+			memset(trade, 0, sizeof(*trade));
+			*state = 2;
 			walk_doc_tree(tdoc, child, state, trade);
-
+			*state = 1;
 			if (gp > 0) {
-				struct trade *trade2 = gp > 0 ? (struct trade *)
-					g_list_nth_data(market.trades, gp - 1)
-					: NULL;
-				if (abs(trade.price - trade2->price)
+				struct trade *trade2 = gp > 0 ?
+					(struct trade *)
+					g_list_nth_data(mkt.trades,
+							gp - 1) : NULL;
+				if (abs(trade->price - trade2->price)
 				    /trade2->price > 2.0e-2)
 					continue;
 				if (trade_equal(trade, trade2)) {
@@ -404,18 +379,25 @@ static void walk_doc_tree(TidyDoc tdoc, TidyNode tnode,
 				}
 			}
 			p = g_slice_dup(struct trade, trade);
-			market.trades = g_list_insert(market.trades, p, gp);
-			market.new_trades++;
-		} else if (*state == 3 && name && strcmp(name, "td") == 0) {
-			*state = 4;
+			mkt.trades = g_list_insert(mkt.trades, p, gp);
+			mkt.new_trades++;
+		} else if (*state == 2 && name && strcmp(name, "td") == 0) {
+			*state = 3;
 			walk_doc_tree(tdoc, child, state, trade);
-		} else if (*state >= 4 && name) {
+			*state = 2;
+		} else if (*state >= 3 && name) {
+			int i = *state;
 			(*state)++;
 			walk_doc_tree(tdoc, child, state, trade);
-		} else if (*state >= 4 && !name) {
+			*state = i;
+		} else if (*state >= 3 && !name) {
+			TidyNode node = tnode;
+			while (!tidyNodeIsTD(node)) node = tidyGetParent(node);
+
 			tidyBufInit(&buf);
-			tidyNodeGetText(doc, child, &buf);
-			switch (i)
+			tidyNodeGetText(tdoc, child, &buf);
+			
+			switch (get_node_cardinality(node))
 			{
 			case 0:
 				sscanf(g_strstrip((char *)buf.bp), "%s",
@@ -425,13 +407,17 @@ static void walk_doc_tree(TidyDoc tdoc, TidyNode tnode,
 				sscanf(g_strstrip((char *)buf.bp), "%s",
 				       trade->seller);
 				break;
-			case 2:
-				sscanf(g_strstrip((char *)buf.bp), "%ld",
-				       &trade->quantity);
+			case 2: 
+			{
+				char *str;
+				str = g_strstrip((char *)buf.bp);
+				str = str_rm_html_char(str);
+				sscanf(str, "%ld", &trade->quantity);
 				break;
+			}
 			case 3:
 				sscanf(strsub(g_strstrip((char *)buf.bp),
-					      ',', '.'), "%f", &trade->price);
+					      ',', '.'), "%lf", &trade->price);
 				break;
 			case 4:
 				sscanf(g_strstrip((char *)buf.bp), "%s",
@@ -439,20 +425,23 @@ static void walk_doc_tree(TidyDoc tdoc, TidyNode tnode,
 				break;
 
 			}
+			tidyBufFree(&buf);
 		}
 	}
-	if (*state >= 0) *state = s;
+	/* if (*state >= 0) *state = s; */
+	return gp;
 }
 
 static void refine_data(const char* xchgfile)
 {
-	CURL *curl;
-	char curl_errbuf[CURL_ERROR_SIZE];
+	/* CURL *curl; */
+	/* char curl_errbuf[CURL_ERROR_SIZE]; */
 	TidyDoc tdoc;
 	TidyBuffer docbuf = {0};
 	TidyBuffer tidy_errbuf = {0};
 	int err;
-	int state;
+	int state, gp;
+	int l;
 	gchar *contents;
 	gsize flen;
 	GError *gerr;
@@ -468,7 +457,7 @@ static void refine_data(const char* xchgfile)
 	tidyBufAppend(&docbuf, contents, flen);
 	err = tidyParseBuffer(tdoc, &docbuf); /* parse the input */
 	if (err < 0) {
-		fprintf(2, "Failed to parse server response. err %d", err);
+		fprintf(stderr, "Failed to parse server response. err %d", err);
 		goto cleanup;
 	}
 	err = tidyCleanAndRepair(tdoc); /* fix any problems */
@@ -478,17 +467,17 @@ static void refine_data(const char* xchgfile)
 	if ( err < 0 ) goto cleanup;
 
 	state = 0;
-	walk_doc_tree(tdoc, tidyGetRoot(tdoc), &state, &trade);
+	gp = walk_doc_tree(tdoc, tidyGetRoot(tdoc), &state, &trade);
 
-end:
 	get_trade_instruction();
 	if (instruction.action != action_none) {
-		if (market.new_trades) {
+		if (mkt.new_trades) {
 			log_data(gp);
-			market.new_trades = 0;
+			mkt.new_trades = 0;
 		}
 		if (execute(instruction.action, instruction.price)
 		    == order_executed) {
+			char buffer[128];
 			sprintf(buffer, "update instructions set status = 1 "
 				"where co_name=\"%s\" and "
 				"expiration = \"%s %s\";",
@@ -500,13 +489,13 @@ end:
 			}
 		}
 	}
-	else if (market.new_trades == 0 || log_data(gp) == 0)
-		return;
-	else if (market.new_trades >= MIN_NEW_TRADES) {
-		analyze();
-		market.new_trades = 0;
+	else if (mkt.new_trades == 0 || log_data(gp) == 0)
+		goto cleanup;
+	else if (mkt.new_trades >= MIN_NEW_TRADES) {
+		/* analyze(); */
+		mkt.new_trades = 0;
 	}
-	l = g_list_length(market.trades) - MAX_TRADES_COUNT;
+	l = g_list_length(mkt.trades) - MAX_TRADES_COUNT;
 	if (l > 0)
 		discard_old_records(l);
 
@@ -536,8 +525,8 @@ static int login(void)
 	/* const char *loginfo = "username=sinbaski&password=2Oceans?"; */
 	char loginfo[80];
 	sprintf(loginfo, "username=%s&password=%s", user, password);
-	const char *url ="https://www.avanza.se/aza/login/login.jsp";
-	FILE *fp;
+	const char *url ="https://www.avanza.se/logga-in";
+	FILE *fp, *body_fp;
 	g_atomic_int_set(&my_status, registering);
 
 	refresh_conn();
@@ -546,6 +535,9 @@ static int login(void)
 	fp = fopen(COOKIE_FILE, "w");
 	curl_easy_setopt(conn.handle, CURLOPT_HEADERDATA, fp);
 	curl_easy_setopt(conn.handle, CURLOPT_HEADERFUNCTION, store_cookie);
+	/* The body data are not needed following the login post */
+	body_fp = fopen("/dev/null", "w");
+	curl_easy_setopt(conn.handle, CURLOPT_WRITEDATA, body_fp);
 	if ((code = curl_easy_perform(conn.handle)) || !conn.valid) {
 		fclose(fp);
 		/* curl_free(str); */
@@ -557,6 +549,7 @@ static int login(void)
 		goto end;
 	}
 	fclose(fp);
+	fclose(body_fp);
 	/* curl_free(str); */
 end:
 	fflush(stderr);
@@ -658,12 +651,13 @@ static void collect_data(void)
 		/* Report to the watcher that I am active */
 		update_watcher();
 		if (i == 0)
-			memset(&market, 0, sizeof(market));
+			memset(&mkt, 0, sizeof(mkt));
 
 #if !USE_FAKE_SOURCE
 		fp = fopen(xchgfile, "w");
 		time(&t1);
 		refresh_conn();
+		curl_easy_setopt(conn.handle, CURLOPT_HTTPGET, 1);
 		curl_easy_setopt(conn.handle, CURLOPT_WRITEDATA, fp);
 		g_string_printf(gstr, "https://www.avanza.se/aktier"
 				"/dagens-avslut.html/%s/%s",
@@ -720,7 +714,7 @@ static void collect_data(void)
 	}
 	curl_easy_cleanup(conn.handle);
 	curl_global_cleanup();
-	g_list_free_full(market.trades, free_trade);
+	g_list_free_full(mkt.trades, free_trade);
 	g_regex_unref(regex);
 	g_string_free(gstr, TRUE);
 	gstr = NULL;
@@ -948,7 +942,7 @@ int main(int argc, char *argv[])
 
 	memset(&my_position, 0, sizeof(my_position));
 	memset(&my_flags, 0, sizeof(my_flags));
-	while ((opt = getopt(argc, argv, "s:w:d:n:")) != -1) {
+	while ((opt = getopt(argc, argv, "s:w:d:n:u:p:")) != -1) {
                switch (opt) {
                case 's':
 		       strcpy(stockinfo.dataid, optarg);

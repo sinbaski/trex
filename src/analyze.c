@@ -10,10 +10,8 @@
 #include <glib.h>
 #include "analyze.h"
 #include "utilities.h"
-
-#if DO_ANALYSIS
 #include "engine.h"
-#endif
+
 
 #define price2str(price, str)						\
 	({								\
@@ -45,7 +43,7 @@ static enum order_status loop_execute(enum trade_status new_status,
 				      enum action_type action,
 				      double price)
 {
-	struct trade *trade = (struct trade *)g_list_last(market.trades)->data;
+	struct trade *trade = (struct trade *)g_list_last(mkt.trades)->data;
 	enum order_status status = order_failed;
 	GString *strprice = make_valid_price(price);
 	const char *ticksize = get_tick_size(price);
@@ -174,7 +172,7 @@ void analyze(void)
 	enum action_type action = action_none;
 	enum order_status status;
 	struct trade *trade = (struct trade *)
-		g_list_last(market.trades)->data;
+		g_list_last(mkt.trades)->data;
 	char msg[256] = {
 		"You shouldn't have seen me."
 	};

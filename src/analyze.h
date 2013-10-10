@@ -112,7 +112,7 @@ struct trade_instruction {
 extern struct trade_position my_position;
 extern struct trade_flags my_flags;
 extern struct trade_instruction latest_instruction;
-extern struct market market;
+extern struct market mkt;
 extern enum trade_status enter_status;
 extern struct stock_info stockinfo;
 extern char todays_date[11];

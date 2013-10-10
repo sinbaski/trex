@@ -6,7 +6,7 @@ USE_FAKE_SOURCE := 0
 DAEMONIZE := 0
 REAL_TRADE := 1
 CURFEW_AFT_5 := 0
-MATLAB_ROOT := /usr/local/MATLAB/R2012a
+MATLAB_ROOT := /usr/local/MATLAB/R2013a
 #LD_LIBRARY_PATH=$(MATLAB_ROOT)/bin/glnxa64
 
 srcs := $(wildcard $(srcdir)/*.c)
@@ -27,7 +27,8 @@ LDFLAGS := \
 -L$(MATLAB_ROOT)/sys/os/glnxa64 \
 -Wl,-rpath $(MATLAB_ROOT)/bin/glnxa64 \
 -Wl,-rpath $(MATLAB_ROOT)/sys/os/glnxa64 \
--lcurl -Wl,-Bsymbolic-functions \
+$(shell curl-config --libs) \
+-ltidy -Wl,-Bsymbolic-functions \
 -leng -lmx \
 $(shell pkg-config --libs glib-2.0) -lm\
 $(shell mysql_config --libs) \
@@ -41,8 +42,8 @@ $(objs): $(objdir)/%.o: $(srcdir)/%.c
 fakesource:
 	make -C fakesource all
 
-.PHONY: intraday-test
-intraday-test: $(objs)
+.PHONY: intraday
+intraday: $(objs)
 	$(CC) $(filter %.o, $^) $(LDFLAGS) -o $@
 
 .PHONY: all
@@ -51,3 +52,4 @@ all: intraday fakesource
 .PHONY: clean
 clean:
 	$(RM) $(objdir)/*.o
+	$(RM) intraday
