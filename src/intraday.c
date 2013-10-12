@@ -258,8 +258,11 @@ static void refresh_conn(void)
 	curl_easy_setopt(conn.handle, CURLOPT_USERAGENT,
 			 "Mozilla/5.0 (compatible; MSIE 9.0; "
 			 "Windows NT 6.1; WOW64; Trident/5.0)");
-	if (g_atomic_int_get(&my_status) != registering)
-		curl_easy_setopt(conn.handle, CURLOPT_COOKIEFILE, COOKIE_FILE);
+	if (g_atomic_int_get(&my_status) != registering) {
+		char buffer[32];
+		sprintf(buffer, "cookies-%s.txt", stockinfo.dataid);
+		curl_easy_setopt(conn.handle, CURLOPT_COOKIEFILE, buffer);
+	}
 }
 #endif
 
@@ -370,6 +373,8 @@ static int walk_doc_tree(TidyDoc tdoc, TidyNode tnode,
 					(struct trade *)
 					g_list_nth_data(mkt.trades,
 							gp - 1) : NULL;
+				if (trade->price < 0.01)
+					continue;
 				if (abs(trade->price - trade2->price)
 				    /trade2->price > 2.0e-2)
 					continue;
@@ -416,9 +421,12 @@ static int walk_doc_tree(TidyDoc tdoc, TidyNode tnode,
 				break;
 			}
 			case 3:
-				sscanf(strsub(g_strstrip((char *)buf.bp),
-					      ',', '.'), "%lf", &trade->price);
+			{
+				char *str = strsub(g_strstrip((char *)buf.bp),
+						   ',', '.');
+				sscanf(str, "%lf", &trade->price);
 				break;
+			}
 			case 4:
 				sscanf(g_strstrip((char *)buf.bp), "%s",
 				       trade->time);
@@ -523,7 +531,7 @@ static int login(void)
 	int ret = 0;
 	int code;
 	/* const char *loginfo = "username=sinbaski&password=2Oceans?"; */
-	char loginfo[80];
+	char loginfo[80], buffer[32];
 	sprintf(loginfo, "username=%s&password=%s", user, password);
 	const char *url ="https://www.avanza.se/logga-in";
 	FILE *fp, *body_fp;
@@ -532,11 +540,13 @@ static int login(void)
 	refresh_conn();
 	curl_easy_setopt(conn.handle, CURLOPT_POSTFIELDS, loginfo);
 	curl_easy_setopt(conn.handle, CURLOPT_URL, url);
-	fp = fopen(COOKIE_FILE, "w");
+	sprintf(buffer, "cookies-%s.txt", stockinfo.dataid);
+	fp = fopen(buffer, "w");
 	curl_easy_setopt(conn.handle, CURLOPT_HEADERDATA, fp);
 	curl_easy_setopt(conn.handle, CURLOPT_HEADERFUNCTION, store_cookie);
 	/* The body data are not needed following the login post */
-	body_fp = fopen("/dev/null", "w");
+	sprintf(buffer, "./login-%s.html", stockinfo.dataid);
+	body_fp = fopen(buffer, "w");
 	curl_easy_setopt(conn.handle, CURLOPT_WRITEDATA, body_fp);
 	if ((code = curl_easy_perform(conn.handle)) || !conn.valid) {
 		fclose(fp);
