@@ -532,8 +532,8 @@ static int login(void)
 	int code;
 	/* const char *loginfo = "username=sinbaski&password=2Oceans?"; */
 	char loginfo[80], buffer[32];
-	sprintf(loginfo, "username=%s&password=%s", user, password);
-	const char *url ="https://www.avanza.se/logga-in";
+	sprintf(loginfo, "j_username=%s&j_password=%s", user, password);
+	const char *url ="https://www.avanza.se/ab/noop";
 	FILE *fp, *body_fp;
 	g_atomic_int_set(&my_status, registering);
 
