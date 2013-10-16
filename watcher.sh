@@ -1,12 +1,12 @@
 #!/bin/bash
 
-wd=/home/xxie/work/avanza/data_extract/intraday
+wd=/home/xxie/intraday
 
-if [ "$wd" != `pwd` ]; then cd $wd; fi
+if [ "$wd" != "`pwd`" ]; then cd $wd; fi
 
 # MATLAB_ROOT is NOT set because ~/.bashrc is not run when
 # this script is run by crontab
-export MATLAB_ROOT=/usr/local/MATLAB/R2012a
+export MATLAB_ROOT=/usr/local/MATLAB/R2013a
 export PATH=$PATH:$MATLAB_ROOT/bin
 # export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$MATLAB_ROOT/bin/glnxa64
 
@@ -25,19 +25,21 @@ while test 1; do
 
 	file="watcher-$stock"
 	if [ ! -f $file ]; then
-	    echo "[`date +%H:%M:%S`] starting $stock..."
+	    echo "[`date`] starting $stock..." >> watcher.log
 	    ./intraday.sh start $stock $do_trade $allow_new
+	    sleep 10
 	elif ps -C intraday -o cmd= | grep -q $stock; then
 	    x="`stat -c %Y $file`"
 	    y="`date +%s`"
 	    if [ $(($y - $x)) -gt 310 ]; then
-		echo "[`date +%H:%M:%S`] restarting $stock"
+		echo "[`date`] restarting $stock" >> watcher.log
 		./intraday.sh stop $stock
 		./intraday.sh start $stock $do_trade $allow_new
 	    fi
 	else
-	    echo "[`date +%H:%M:%S`] starting $stock..."
+	    echo "[`date`] starting $stock..." >> watcher.log
 	    ./intraday.sh start $stock $do_trade $allow_new
+	    sleep 10
 	fi
     done < stocks.conf
     sleep 310
