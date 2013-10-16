@@ -368,15 +368,12 @@ static int walk_doc_tree(TidyDoc tdoc, TidyNode tnode,
 			*state = 2;
 			walk_doc_tree(tdoc, child, state, trade);
 			*state = 1;
-			if (gp > 0) {
-				struct trade *trade2 = gp > 0 ?
-					(struct trade *)
-					g_list_nth_data(mkt.trades,
-							gp - 1) : NULL;
-				if (trade->price < 0.01)
-					continue;
-				if (abs(trade->price - trade2->price)
-				    /trade2->price > 2.0e-2)
+			if (trade->quantity == 0)
+				continue;
+			if (gp) {
+				struct trade *trade2 = (struct trade *)
+					g_list_nth_data(mkt.trades, gp - 1);
+				if (abs(trade->price - trade2->price)/trade2->price > 2.0e-2)
 					continue;
 				if (trade_equal(trade, trade2)) {
 					*state = -1;
@@ -533,13 +530,17 @@ static int login(void)
 	/* const char *loginfo = "username=sinbaski&password=2Oceans?"; */
 	char loginfo[80], buffer[32];
 	sprintf(loginfo, "j_username=%s&j_password=%s", user, password);
-	const char *url ="https://www.avanza.se/ab/noop";
 	FILE *fp, *body_fp;
 	g_atomic_int_set(&my_status, registering);
 
 	refresh_conn();
 	curl_easy_setopt(conn.handle, CURLOPT_POSTFIELDS, loginfo);
-	curl_easy_setopt(conn.handle, CURLOPT_URL, url);
+
+	sprintf(buffer, "https://www.avanza.se/start");
+	curl_easy_setopt(conn.handle, CURLOPT_REFERER, buffer);
+	sprintf(buffer, "https://www.avanza.se/ab/noop");
+	curl_easy_setopt(conn.handle, CURLOPT_URL, buffer);
+
 	sprintf(buffer, "cookies-%s.txt", stockinfo.dataid);
 	fp = fopen(buffer, "w");
 	curl_easy_setopt(conn.handle, CURLOPT_HEADERDATA, fp);
