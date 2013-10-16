@@ -1,7 +1,7 @@
-create table company(
+alter table company(
  name varchar(32) not null unique,
  tbl_name varchar(32) not null primary key,
- dataid varchar(16) not null unique,
+ dataid varchar(16),
  orderid varchar(16) not null unique,
  my_mode tinyint unsigned,
  my_status tinyint unsigned, 
@@ -21,3 +21,4 @@ insert into company values
 
 
 
+alter table company modify dataid varchar(16);
