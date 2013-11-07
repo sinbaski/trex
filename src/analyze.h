@@ -96,6 +96,7 @@ struct stock_info {
 	/* dataid is the orderbookId */
 	char dataid[7];
 	char orderid[7];
+	char type[33];
 };
 
 struct trade_flags {

@@ -24,7 +24,6 @@
 #define DATA_UPDATE_INTERVAL 36
 
 struct market mkt;
-
 enum status {
 	registering,
 	collecting,
@@ -40,6 +39,7 @@ struct connection {
 };
 
 struct stock_info stockinfo;
+int updt_ntvl = DATA_UPDATE_INTERVAL;
 
 char user[16];
 char password[32];
@@ -104,7 +104,7 @@ static void load_trade_data(void)
 	char stmt[256];
 
 	sprintf(stmt, "select name, tbl_name, orderid, my_mode, my_status, "
-		"my_price, my_quantity, my_quota from company "
+		"my_price, my_quantity, my_quota, type from company "
 		"where dataid=\"%s\";", stockinfo.dataid);
 	if (mysql_query(mysqldb, stmt)) {
 		fprintf(stderr, "mysql error: %s\n", mysql_error(mysqldb));
@@ -120,6 +120,7 @@ static void load_trade_data(void)
 	sscanf(row[5], "%lf", &my_position.price);
 	sscanf(row[6], "%ld", &my_position.quantity);
 	sscanf(row[7], "%lf", &my_position.quota);
+	strcpy(stockinfo.type, row[8]);
 	mysql_free_result(res);
 
 	if (my_position.status == 1)
@@ -433,14 +434,11 @@ static int walk_doc_tree(TidyDoc tdoc, TidyNode tnode,
 			tidyBufFree(&buf);
 		}
 	}
-	/* if (*state >= 0) *state = s; */
 	return gp;
 }
 
 static void refine_data(const char* xchgfile)
 {
-	/* CURL *curl; */
-	/* char curl_errbuf[CURL_ERROR_SIZE]; */
 	TidyDoc tdoc;
 	TidyBuffer docbuf = {0};
 	TidyBuffer tidy_errbuf = {0};
@@ -451,6 +449,7 @@ static void refine_data(const char* xchgfile)
 	gsize flen;
 	GError *gerr;
 	struct trade trade;
+	static time_t tau1 = 0, tau2 = 0;
 
 	tdoc = tidyCreate();
 	tidyOptSetBool(tdoc, TidyForceOutput, yes); /* try harder */
@@ -497,8 +496,12 @@ static void refine_data(const char* xchgfile)
 	else if (mkt.new_trades == 0 || log_data(gp) == 0)
 		goto cleanup;
 	else if (mkt.new_trades >= MIN_NEW_TRADES) {
-		/* analyze(); */
+		time(&tau2);
+		if (tau1)
+			updt_ntvl = MAX(tau2 - tau1, DATA_UPDATE_INTERVAL);
+		tau1 = tau2;
 		mkt.new_trades = 0;
+		/* analyze(); */
 	}
 	l = g_list_length(mkt.trades) - MAX_TRADES_COUNT;
 	if (l > 0)
@@ -627,10 +630,37 @@ static inline void update_watcher(void)
 	fclose(fp);
 }
 
+static int make_url(GString *gstr, const char *which)
+{
+	int ret = 0;
+	if (strcmp(stockinfo.type, "aktier") == 0) {
+		if (strcmp(which, "avslut") == 0)
+			g_string_printf(gstr, "https://www.avanza.se/aktier"
+					"/dagens-avslut.html/%s/%s",
+					stockinfo.dataid, stockinfo.name);
+		else if (strcmp(which, "om") == 0)
+			g_string_printf(gstr, "https://www.avanza.se/aktier/"
+					"om-aktien.html/%s/%s", stockinfo.dataid,
+					stockinfo.name);
+		else
+			ret = -1;
+	} else if (strcmp(stockinfo.type, "certifikat") == 0) {
+		if (strcmp(which, "avslut") == 0)
+			g_string_printf(gstr, "https://www.avanza.se/certifikat"
+					"/dagens-avslut.html/%s/%s",
+					stockinfo.dataid, stockinfo.name);
+		else if (strcmp(which, "om") == 0)
+			g_string_printf(gstr, "https://www.avanza.se/certifikat"
+					"/om-certifikatet.html/%s/%s",
+					stockinfo.dataid, stockinfo.name);
+		else
+			ret = -1;
+	}
+	return ret;
+}
+
 static void collect_data(void)
 {
-	GRegex *regex;
-	GError *error = NULL;
 	GString *gstr = g_string_sized_new(128);
 	char xchgfile[100];
 	int i;
@@ -638,21 +668,10 @@ static void collect_data(void)
 	FILE *req, *resp;
 	char message[10];
 #endif
-	/* The number of shares that we have on the account */
-	regex = g_regex_new("^<TR.*><TD.*><A.*>([A-Z]+)</A></TD>"
-			    "<TD.*><A.*>([A-Z]+)</A></TD>"
-			    "<TD.*>([A-Z]+)</TD>"
-			    "<TD.*>([0-9]{2}:[0-9]{2}:[0-9]{2})</TD>"
-			    "<TD.*>([0-9]+,[0-9]{2})</TD>"
-			    "<TD.*>([0-9]+)</TD></TR>$",
-			    (GRegexCompileFlags)0, (GRegexMatchFlags)0,
-			    &error);
 	update_watcher();
 	prepare_connection();
 
 	sprintf(xchgfile, "./intraday-%s.html", stockinfo.dataid);
-	/* if (get_status(&my_position.status, &my_position.price) != 0) */
-	/* 	return; */
 	for (i = 0; g_atomic_int_get(&my_status) == collecting; i = 1) {
 		struct stat st;
 		FILE *fp;
@@ -670,14 +689,9 @@ static void collect_data(void)
 		refresh_conn();
 		curl_easy_setopt(conn.handle, CURLOPT_HTTPGET, 1);
 		curl_easy_setopt(conn.handle, CURLOPT_WRITEDATA, fp);
-		g_string_printf(gstr, "https://www.avanza.se/aktier"
-				"/dagens-avslut.html/%s/%s",
-				stockinfo.dataid, stockinfo.name);
+		make_url(gstr, "avslut");
 		curl_easy_setopt(conn.handle, CURLOPT_URL, gstr->str);
-
-		g_string_printf(gstr, "https://www.avanza.se/aktier/"
-				"om-aktien.html/%s/%s", stockinfo.dataid,
-				stockinfo.name);
+		make_url(gstr, "om");
 		curl_easy_setopt(conn.handle, CURLOPT_REFERER, gstr->str);
 		if (perform_request()) {
 			fclose(fp);
@@ -701,10 +715,7 @@ static void collect_data(void)
 #endif
 		stat(xchgfile, &st);
 		if (st.st_size) {
-			/* fp = fopen(xchgfile, "r"); */
-			/* refine_data(fp, regex); */
 			refine_data(xchgfile);
-			/* fclose(fp); */
 		} else {
 			char *timestring;
 			timestring = get_timestring();
@@ -716,8 +727,8 @@ static void collect_data(void)
 		fflush(stderr);
 #if !USE_FAKE_SOURCE
 		time(&t2);
-		if (t2 - t1 < DATA_UPDATE_INTERVAL)
-			sleep(DATA_UPDATE_INTERVAL - (t2 - t1));
+		if (t2 - t1 < updt_ntvl)
+			sleep(updt_ntvl - (t2 - t1));
 #else
 		if (strncmp(message, "done", sizeof(message)) == 0)
 			g_atomic_int_set(&my_status, finished);
@@ -726,7 +737,6 @@ static void collect_data(void)
 	curl_easy_cleanup(conn.handle);
 	curl_global_cleanup();
 	g_list_free_full(mkt.trades, free_trade);
-	g_regex_unref(regex);
 	g_string_free(gstr, TRUE);
 	gstr = NULL;
 #if USE_FAKE_SOURCE
